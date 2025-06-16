@@ -4,6 +4,11 @@ const path = require('path');
 const fs = require('fs').promises;
 const { spawn } = require('child_process');
 
+// RASSDB command paths
+const RASSDB_BIN = path.join(__dirname, '..', 'bin');
+const RASSDB_SEARCH = path.join(RASSDB_BIN, 'rassdb-search');
+const RASSDB_STATS = path.join(RASSDB_BIN, 'rassdb-stats');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -15,6 +20,7 @@ app.use(express.static(path.join(__dirname)));
 // Conversation memory
 let conversationHistory = [];
 let promptHistory = [];
+let sessions = {};
 
 // Load history on startup
 async function loadHistory() {
@@ -39,13 +45,55 @@ async function saveHistory() {
     await fs.writeFile('conversation_history.json', JSON.stringify(conversationHistory.slice(-20), null, 2));
 }
 
+// Session management endpoints
+app.post('/sessions', (req, res) => {
+    const sessionId = Date.now().toString(36) + Math.random().toString(36).substr(2);
+    sessions[sessionId] = {
+        id: sessionId,
+        created: new Date().toISOString(),
+        metadata: req.body.metadata || {},
+        messages: []
+    };
+    res.json({ id: sessionId, created: sessions[sessionId].created });
+});
+
+app.get('/sessions/:id', (req, res) => {
+    const session = sessions[req.params.id];
+    if (!session) {
+        return res.status(404).json({ error: 'Session not found' });
+    }
+    res.json(session);
+});
+
+app.delete('/sessions/:id', (req, res) => {
+    delete sessions[req.params.id];
+    res.json({ message: 'Session deleted' });
+});
+
+app.get('/sessions/:id/history', (req, res) => {
+    const session = sessions[req.params.id];
+    if (!session) {
+        return res.status(404).json({ error: 'Session not found' });
+    }
+    res.json(session.messages || []);
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'healthy',
+        version: '0.1.0',
+        uptime: process.uptime()
+    });
+});
+
 // RAG search endpoint
 app.post('/api/search', async (req, res) => {
     const { query, limit = 5 } = req.body;
     
     try {
         // Call RASSDB search
-        const pythonProcess = spawn('rassdb-search', [
+        const pythonProcess = spawn(RASSDB_SEARCH, [
             query,
             '--semantic',
             '--limit', limit.toString(),
@@ -81,6 +129,63 @@ app.post('/api/search', async (req, res) => {
     }
 });
 
+// Query endpoint for frontend
+app.post('/query', async (req, res) => {
+    const { query, session_id, top_k = 5 } = req.body;
+    
+    try {
+        // Call RASSDB search
+        const pythonProcess = spawn(RASSDB_SEARCH, [
+            query,
+            '--semantic',
+            '--limit', top_k.toString(),
+            '--db', path.join(__dirname, '.rassdb', 'example-chat-bot-nomic-embed-text-v1.5.rassdb'),
+            '--format', 'json'
+        ]);
+        
+        let output = '';
+        let error = '';
+        
+        pythonProcess.stdout.on('data', (data) => {
+            output += data.toString();
+        });
+        
+        pythonProcess.stderr.on('data', (data) => {
+            error += data.toString();
+        });
+        
+        pythonProcess.on('close', (code) => {
+            if (code !== 0) {
+                res.status(500).json({ error: error || 'Query failed' });
+            } else {
+                try {
+                    const results = JSON.parse(output);
+                    
+                    // Store in session if provided
+                    if (session_id && sessions[session_id]) {
+                        sessions[session_id].messages.push({
+                            query: query,
+                            results: results,
+                            timestamp: new Date().toISOString()
+                        });
+                    }
+                    
+                    res.json({
+                        results: results,
+                        total: results.length,
+                        query_time: 0.1,
+                        session_id: session_id
+                    });
+                } catch (e) {
+                    res.status(500).json({ error: 'Failed to parse search results' });
+                }
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Get available models from Ollama
 app.get('/api/models', async (req, res) => {
     try {
@@ -105,7 +210,7 @@ app.post('/api/generate', async (req, res) => {
     // Search for relevant code context if RAG is enabled
     if (useRAG) {
         try {
-            const searchProcess = spawn('rassdb-search', [
+            const searchProcess = spawn(RASSDB_SEARCH, [
                 prompt,
                 '--semantic',
                 '--limit', '5',
@@ -265,7 +370,7 @@ app.delete('/api/history', async (req, res) => {
 // Database statistics
 app.get('/api/stats', async (req, res) => {
     try {
-        const statsProcess = spawn('rassdb-stats', [
+        const statsProcess = spawn(RASSDB_STATS, [
             '--db', path.join(__dirname, '.rassdb', 'example-chat-bot-nomic-embed-text-v1.5.rassdb'),
             '--format', 'json'
         ]);
@@ -319,6 +424,6 @@ loadHistory().then(() => {
         console.log('  1. Ollama is running (ollama serve)');
         console.log('  2. Qwen2.5-Coder model is installed (ollama pull qwen2.5-coder:7b-instruct)');
         console.log('  3. RASSDB is installed (pip install -e ..)');
-        console.log('  4. A database exists at ../code_rag.db');
+        console.log('  4. A database exists at .rassdb/example-chat-bot-nomic-embed-text-v1.5.rassdb');
     });
 });

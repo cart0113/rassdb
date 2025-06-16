@@ -225,12 +225,15 @@ class CodeParser:
         # Fallback to simple parsing
         return self._simple_parse(content, language)
 
-    def _parse_with_tree_sitter(self, content: str, language: str) -> List[CodeChunk]:
-        """Parse using Tree-sitter.
+    def _parse_with_tree_sitter(
+        self, content: str, language: str, max_chunk_size: int = 1500
+    ) -> List[CodeChunk]:
+        """Parse using Tree-sitter with chunk size management.
 
         Args:
             content: Source code content.
             language: Programming language name.
+            max_chunk_size: Maximum size of a chunk in characters.
 
         Returns:
             List of extracted code chunks.
@@ -242,12 +245,99 @@ class CodeParser:
         chunks = []
         lines = content.split("\n")
 
-        def extract_chunks(node: tree_sitter.Node, depth: int = 0) -> None:
+        def extract_chunks(
+            node: tree_sitter.Node, depth: int = 0, parent_class: Optional[str] = None
+        ) -> None:
             """Recursively extract chunks from the syntax tree."""
+            current_class = parent_class
+
+            # Check if this node is a class
+            if node.type in [
+                "class_definition",
+                "class_declaration",
+                "class_specifier",
+            ]:
+                # Extract class name
+                for child in node.children:
+                    if child.type in ["identifier", "property_identifier"]:
+                        current_class = lines[child.start_point[0]][
+                            child.start_point[1] : child.end_point[1]
+                        ]
+                        break
+
             if node.type in config.node_types:
                 start_line = node.start_point[0]
                 end_line = node.end_point[0]
                 chunk_content = "\n".join(lines[start_line : end_line + 1])
+
+                # Check if chunk is too large
+                if len(chunk_content) > max_chunk_size:
+                    # If node has semantic children, recursively chunk them
+                    semantic_children = [
+                        child
+                        for child in node.children
+                        if child.type in config.node_types
+                    ]
+
+                    if semantic_children:
+                        # Process children instead
+                        for child in semantic_children:
+                            extract_chunks(child, depth + 1, current_class)
+                        return
+                    else:
+                        # No semantic children, split by lines while preserving context
+                        # This handles cases like very long functions without subfunctions
+                        chunk_lines = lines[start_line : end_line + 1]
+                        current_chunk = []
+                        current_size = 0
+                        chunk_start = start_line + 1
+
+                        for i, line in enumerate(chunk_lines):
+                            line_size = len(line) + 1  # +1 for newline
+                            if (
+                                current_size + line_size > max_chunk_size
+                                and current_chunk
+                            ):
+                                # Save current chunk
+                                chunks.append(
+                                    CodeChunk(
+                                        content="\n".join(current_chunk),
+                                        chunk_type=config.node_types[node.type]
+                                        + "_part",
+                                        start_line=chunk_start,
+                                        end_line=chunk_start + len(current_chunk) - 1,
+                                        name=name if "name" in locals() else None,
+                                        metadata={
+                                            "language": language,
+                                            "depth": depth,
+                                            "part": True,
+                                        },
+                                    )
+                                )
+                                current_chunk = [line]
+                                current_size = line_size
+                                chunk_start = start_line + i + 1
+                            else:
+                                current_chunk.append(line)
+                                current_size += line_size
+
+                        # Don't forget the last chunk
+                        if current_chunk:
+                            chunks.append(
+                                CodeChunk(
+                                    content="\n".join(current_chunk),
+                                    chunk_type=config.node_types[node.type] + "_part",
+                                    start_line=chunk_start,
+                                    end_line=start_line + len(chunk_lines),
+                                    name=name if "name" in locals() else None,
+                                    metadata={
+                                        "language": language,
+                                        "depth": depth,
+                                        "part": True,
+                                    },
+                                )
+                            )
+                        return
 
                 # Try to extract name
                 name = None
@@ -258,30 +348,40 @@ class CodeParser:
                         ]
                         break
 
+                metadata = {"language": language, "depth": depth}
+
+                # Add parent class for methods
+                chunk_type = config.node_types[node.type]
+                if chunk_type == "method" and current_class:
+                    metadata["parent_class"] = current_class
+
                 chunks.append(
                     CodeChunk(
                         content=chunk_content,
-                        chunk_type=config.node_types[node.type],
+                        chunk_type=chunk_type,
                         start_line=start_line + 1,
                         end_line=end_line + 1,
                         name=name,
-                        metadata={"language": language, "depth": depth},
+                        metadata=metadata,
                     )
                 )
 
-            # Recurse into children
+            # Recurse into children with updated parent class
             for child in node.children:
-                extract_chunks(child, depth + 1)
+                extract_chunks(child, depth + 1, current_class)
 
         extract_chunks(tree.root_node)
         return chunks
 
-    def _simple_parse(self, content: str, language: Optional[str]) -> List[CodeChunk]:
+    def _simple_parse(
+        self, content: str, language: Optional[str], max_chunk_size: int = 1500
+    ) -> List[CodeChunk]:
         """Simple parsing fallback for when Tree-sitter is not available.
 
         Args:
             content: Source code content.
             language: Programming language name.
+            max_chunk_size: Maximum size of a chunk in characters.
 
         Returns:
             List of extracted code chunks.
@@ -290,14 +390,16 @@ class CodeParser:
 
         # Language-specific simple parsing
         if language == "python":
-            return self._simple_parse_python(lines, language)
+            return self._simple_parse_python(lines, language, max_chunk_size)
         elif language in ["javascript", "typescript"]:
-            return self._simple_parse_javascript(lines, language)
+            return self._simple_parse_javascript(lines, language, max_chunk_size)
         else:
             # Generic chunking by empty lines
-            return self._chunk_by_paragraphs(lines, language)
+            return self._chunk_by_paragraphs(lines, language, max_chunk_size)
 
-    def _simple_parse_python(self, lines: List[str], language: str) -> List[CodeChunk]:
+    def _simple_parse_python(
+        self, lines: List[str], language: str, max_chunk_size: int = 1500
+    ) -> List[CodeChunk]:
         """Simple Python parsing based on indentation and keywords.
 
         Args:
@@ -311,6 +413,7 @@ class CodeParser:
         current_chunk = []
         current_type = None
         current_name = None
+        current_class = None
         start_line = 0
 
         for i, line in enumerate(lines):
@@ -318,14 +421,26 @@ class CodeParser:
             if line.strip().startswith(("def ", "class ", "async def ")):
                 # Save previous chunk if exists
                 if current_chunk:
+                    metadata = {"language": language}
+                    # Add parent class for methods
+                    if (
+                        current_type == "function"
+                        and current_class
+                        and line.startswith((" ", "\t"))
+                    ):
+                        metadata["parent_class"] = current_class
+                        chunk_type = "method"
+                    else:
+                        chunk_type = current_type or "code"
+
                     chunks.append(
                         CodeChunk(
                             content="\n".join(current_chunk),
-                            chunk_type=current_type or "code",
+                            chunk_type=chunk_type,
                             start_line=start_line + 1,
                             end_line=i,
                             name=current_name,
-                            metadata={"language": language},
+                            metadata=metadata,
                         )
                     )
 
@@ -341,8 +456,15 @@ class CodeParser:
                 current_chunk = [line]
                 if line.strip().startswith("class "):
                     current_type = "class"
+                    current_class = current_name  # Track current class
                 else:
                     current_type = "function"
+                    # If this is indented, it's likely a method
+                    if not line.startswith((" ", "\t")):
+                        current_class = (
+                            None  # Reset class context for top-level functions
+                        )
+
                 start_line = i
             elif current_chunk:
                 # Continue current chunk if indented
@@ -350,37 +472,56 @@ class CodeParser:
                     current_chunk.append(line)
                 else:
                     # End current chunk
+                    metadata = {"language": language}
+                    # Add parent class for methods
+                    if current_type == "function" and current_class:
+                        metadata["parent_class"] = current_class
+                        chunk_type = "method"
+                    else:
+                        chunk_type = current_type or "code"
+
                     chunks.append(
                         CodeChunk(
                             content="\n".join(current_chunk),
-                            chunk_type=current_type or "code",
+                            chunk_type=chunk_type,
                             start_line=start_line + 1,
                             end_line=i,
                             name=current_name,
-                            metadata={"language": language},
+                            metadata=metadata,
                         )
                     )
                     current_chunk = []
                     current_type = None
                     current_name = None
+                    # Reset class context when we're back at top level
+                    if not line.startswith((" ", "\t")):
+                        current_class = None
 
         # Don't forget the last chunk
         if current_chunk:
+            metadata = {"language": language}
+            # Add parent class for methods
+            if current_type == "function" and current_class:
+                metadata["parent_class"] = current_class
+                chunk_type = "method"
+            else:
+                chunk_type = current_type or "code"
+
             chunks.append(
                 CodeChunk(
                     content="\n".join(current_chunk),
-                    chunk_type=current_type or "code",
+                    chunk_type=chunk_type,
                     start_line=start_line + 1,
                     end_line=len(lines),
                     name=current_name,
-                    metadata={"language": language},
+                    metadata=metadata,
                 )
             )
 
         return chunks
 
     def _simple_parse_javascript(
-        self, lines: List[str], language: str
+        self, lines: List[str], language: str, max_chunk_size: int = 1500
     ) -> List[CodeChunk]:
         """Simple JavaScript/TypeScript parsing based on braces.
 
@@ -475,7 +616,7 @@ class CodeParser:
         return chunks
 
     def _chunk_by_paragraphs(
-        self, lines: List[str], language: Optional[str]
+        self, lines: List[str], language: Optional[str], max_chunk_size: int = 1500
     ) -> List[CodeChunk]:
         """Generic chunking by paragraphs (empty lines).
 

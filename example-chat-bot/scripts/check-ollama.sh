@@ -41,22 +41,22 @@ fi
 
 # Check for Qwen model
 echo ""
-echo "Checking for qwen2.5-coder:7b model..."
+echo "Checking for qwen2.5-coder:7b-instruct model..."
 
 # Get list of models
-MODELS=$(ollama list 2>/dev/null | grep -E "qwen2\.5-coder:7b|qwen2.5-coder:latest" || true)
+MODELS=$(ollama list 2>/dev/null | grep -E "qwen2\.5-coder:7b-instruct|qwen2.5-coder:latest" || true)
 
 if [ -z "$MODELS" ]; then
     echo "❌ Qwen2.5-Coder model not found!"
     echo ""
-    echo "Installing qwen2.5-coder:7b model..."
+    echo "Installing qwen2.5-coder:7b-instruct model..."
     echo "This may take a few minutes..."
     
-    if ollama pull qwen2.5-coder:7b; then
-        echo "✅ Successfully installed qwen2.5-coder:7b"
+    if ollama pull qwen2.5-coder:7b-instruct; then
+        echo "✅ Successfully installed qwen2.5-coder:7b-instruct"
     else
-        echo "❌ Failed to install qwen2.5-coder:7b"
-        echo "Please try manually: ollama pull qwen2.5-coder:7b"
+        echo "❌ Failed to install qwen2.5-coder:7b-instruct"
+        echo "Please try manually: ollama pull qwen2.5-coder:7b-instruct"
         exit 1
     fi
 else
@@ -71,7 +71,7 @@ echo "Testing Qwen model..."
 TEST_RESPONSE=$(curl -s -X POST http://localhost:11434/api/generate \
     -H "Content-Type: application/json" \
     -d '{
-        "model": "qwen2.5-coder:7b",
+        "model": "qwen2.5-coder:7b-instruct",
         "prompt": "Say hello",
         "stream": false
     }' 2>/dev/null)

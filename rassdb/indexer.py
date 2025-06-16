@@ -113,7 +113,7 @@ class CodebaseIndexer:
     def __init__(
         self,
         db_path: str = "code_rag.db",
-        model_name: str = "nomic-ai/nomic-embed-text-v1.5",
+        model_name: str = "nomic-ai/nomic-embed-code-v1.5",
         embedding_dim: int = 768,
         code_extensions: Optional[Set[str]] = None,
         ignore_patterns: Optional[Set[str]] = None,
@@ -298,39 +298,24 @@ class CodebaseIndexer:
     ) -> str:
         """Create text for embedding that focuses on code content and semantics.
 
+        Since we're using Nomic Embed Code model, we send just the raw code
+        as it's specifically trained to understand code structure and semantics.
+        Per best practices, we avoid adding any metadata like language identifiers,
+        chunk type labels, or parent class information.
+
         Args:
             chunk: The code chunk.
             language: Programming language.
             file_path: Relative file path.
 
         Returns:
-            Text to be embedded.
+            Text to be embedded (just the raw code).
         """
-        parts = []
-
-        # Add language as context
-        if language:
-            parts.append(f"Language: {language}")
-
-        # Add type context
-        if chunk.chunk_type:
-            parts.append(f"Type: {chunk.chunk_type}")
-
-        # Add name if available (function/class name)
-        if chunk.name:
-            parts.append(f"Name: {chunk.name}")
-
-        # Add file context (just the filename, not full path)
-        parts.append(f"File: {Path(file_path).name}")
-
-        # Add the actual code content - this should be the main focus
-        parts.append("Code:")
-        parts.append(chunk.content)
-
-        return "\n".join(parts)
+        # Return only the raw code - no metadata, no language identifiers
+        return chunk.content
 
     def index_file(
-        self, file_path: Path, base_path: Path, max_chunk_size: int = 5000
+        self, file_path: Path, base_path: Path, max_chunk_size: int = 1500
     ) -> int:
         """Index a single file.
 

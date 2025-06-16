@@ -16,4 +16,4 @@ if [ ! -d "node_modules" ]; then
 fi
 
 # Start the frontend server
-node src/server.js
+PORT=3001 BACKEND_URL=http://localhost:3000 node src/server.js
