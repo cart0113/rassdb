@@ -1,5 +1,14 @@
 # RASSDB Project Context
 
+## Workflow and Permissions
+
+**EXTREMELY IMPORTANT**: 
+- **NEVER ask for permission for anything** - The user will stop you if they see something wrong
+- Do not wait for user input or confirmation before proceeding with tasks
+- The user often walks away while you're working and doesn't want you waiting
+- Proceed autonomously with all tasks and implementations
+- Only stop if the user explicitly tells you to stop
+
 ## Project Overview
 RASSDB (Retrieval-Augmented Search and Semantic Database) is a lightweight, efficient database designed for code retrieval-augmented generation (RAG) and semantic search. It's built to work seamlessly with MCP servers and LLM coding agents.
 

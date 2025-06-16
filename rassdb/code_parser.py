@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CodeChunk:
     """Represents a semantic code chunk extracted from source code.
-    
+
     Attributes:
         content: The actual code content.
         chunk_type: Type of chunk (e.g., 'function', 'class', 'method').
@@ -25,6 +25,7 @@ class CodeChunk:
         name: Optional name of the chunk (e.g., function name).
         metadata: Additional metadata about the chunk.
     """
+
     content: str
     chunk_type: str
     start_line: int
@@ -35,6 +36,7 @@ class CodeChunk:
 
 class LanguageConfig(NamedTuple):
     """Configuration for a programming language parser."""
+
     module_name: str
     node_types: Dict[str, str]  # Maps Tree-sitter node types to our chunk types
     extensions: List[str]
@@ -42,11 +44,11 @@ class LanguageConfig(NamedTuple):
 
 class CodeParser:
     """Parser for extracting semantic code chunks using Tree-sitter.
-    
+
     This parser supports multiple programming languages and falls back to
     simple heuristic parsing when Tree-sitter is not available.
     """
-    
+
     # Language configurations
     LANGUAGE_CONFIGS = {
         "python": LanguageConfig(
@@ -130,100 +132,123 @@ class CodeParser:
             extensions=[".go"],
         ),
     }
-    
+
     def __init__(self) -> None:
         """Initialize the code parser."""
         self.parsers: Dict[str, tree_sitter.Parser] = {}
         self.languages: Dict[str, tree_sitter.Language] = {}
         self._extension_map: Dict[str, str] = {}
         self._init_languages()
-    
+
     def _init_languages(self) -> None:
         """Initialize Tree-sitter languages with robust API handling."""
         # Build extension map
         for lang_name, config in self.LANGUAGE_CONFIGS.items():
             for ext in config.extensions:
                 self._extension_map[ext] = lang_name
-        
+
         # Try to initialize each language parser
         for lang_name, config in self.LANGUAGE_CONFIGS.items():
             try:
                 module = __import__(config.module_name)
-                
-                # Get the language capsule and wrap it
-                lang_capsule = module.language()
-                language = tree_sitter.Language(lang_capsule)
+
+                # Special handling for TypeScript which has a different API
+                if lang_name == "typescript":
+                    # TypeScript module exports language_typescript instead of language()
+                    if hasattr(module, "language_typescript"):
+                        lang_capsule = module.language_typescript()
+                        language = tree_sitter.Language(lang_capsule)
+                    else:
+                        # Skip TypeScript if it doesn't have the expected API
+                        logger.debug(f"Skipping {lang_name} parser - incompatible API")
+                        continue
+                else:
+                    # Get the language capsule and wrap it
+                    lang_capsule = module.language()
+                    language = tree_sitter.Language(lang_capsule)
+
                 parser = tree_sitter.Parser(language)
-                
+
                 self.languages[lang_name] = language
                 self.parsers[lang_name] = parser
                 logger.debug(f"✓ {lang_name} parser initialized successfully")
-                
+
+            except ValueError as e:
+                # Skip languages with version incompatibility
+                if "Incompatible Language version" in str(e):
+                    logger.debug(
+                        f"Skipping {lang_name} parser - version incompatibility: {e}"
+                    )
+                else:
+                    logger.warning(f"Could not initialize {lang_name} parser: {e}")
+            except AttributeError as e:
+                # Skip languages with API changes
+                logger.debug(f"Skipping {lang_name} parser - API incompatibility: {e}")
             except Exception as e:
                 logger.warning(f"Could not initialize {lang_name} parser: {e}")
-    
+
     def detect_language(self, file_path: str) -> Optional[str]:
         """Detect language from file extension.
-        
+
         Args:
             file_path: Path to the source file.
-            
+
         Returns:
             Language name or None if not detected.
         """
         ext = Path(file_path).suffix.lower()
         return self._extension_map.get(ext)
-    
+
     def parse_file(self, file_path: str, content: str) -> List[CodeChunk]:
         """Parse a file and extract code chunks.
-        
+
         Args:
             file_path: Path to the source file.
             content: Content of the file.
-            
+
         Returns:
             List of extracted code chunks.
         """
         language = self.detect_language(file_path)
-        
+
         if not language:
             logger.debug(f"Unknown language for {file_path}, using simple parsing")
             return self._simple_parse(content, None)
-        
+
         # If we have a parser for this language, use it
         if language in self.parsers:
             try:
                 return self._parse_with_tree_sitter(content, language)
             except Exception as e:
                 logger.warning(f"Tree-sitter parsing failed for {file_path}: {e}")
-        
+
         # Fallback to simple parsing
         return self._simple_parse(content, language)
-    
+
     def _parse_with_tree_sitter(self, content: str, language: str) -> List[CodeChunk]:
         """Parse using Tree-sitter.
-        
+
         Args:
             content: Source code content.
             language: Programming language name.
-            
+
         Returns:
             List of extracted code chunks.
         """
         parser = self.parsers[language]
         config = self.LANGUAGE_CONFIGS[language]
         tree = parser.parse(bytes(content, "utf8"))
-        
+
         chunks = []
         lines = content.split("\n")
-        
+
         def extract_chunks(node: tree_sitter.Node, depth: int = 0) -> None:
             """Recursively extract chunks from the syntax tree."""
             if node.type in config.node_types:
                 start_line = node.start_point[0]
                 end_line = node.end_point[0]
                 chunk_content = "\n".join(lines[start_line : end_line + 1])
-                
+
                 # Try to extract name
                 name = None
                 for child in node.children:
@@ -232,7 +257,7 @@ class CodeParser:
                             child.start_point[1] : child.end_point[1]
                         ]
                         break
-                
+
                 chunks.append(
                     CodeChunk(
                         content=chunk_content,
@@ -243,26 +268,26 @@ class CodeParser:
                         metadata={"language": language, "depth": depth},
                     )
                 )
-            
+
             # Recurse into children
             for child in node.children:
                 extract_chunks(child, depth + 1)
-        
+
         extract_chunks(tree.root_node)
         return chunks
-    
+
     def _simple_parse(self, content: str, language: Optional[str]) -> List[CodeChunk]:
         """Simple parsing fallback for when Tree-sitter is not available.
-        
+
         Args:
             content: Source code content.
             language: Programming language name.
-            
+
         Returns:
             List of extracted code chunks.
         """
         lines = content.split("\n")
-        
+
         # Language-specific simple parsing
         if language == "python":
             return self._simple_parse_python(lines, language)
@@ -271,14 +296,14 @@ class CodeParser:
         else:
             # Generic chunking by empty lines
             return self._chunk_by_paragraphs(lines, language)
-    
+
     def _simple_parse_python(self, lines: List[str], language: str) -> List[CodeChunk]:
         """Simple Python parsing based on indentation and keywords.
-        
+
         Args:
             lines: Lines of code.
             language: Programming language name.
-            
+
         Returns:
             List of extracted code chunks.
         """
@@ -287,7 +312,7 @@ class CodeParser:
         current_type = None
         current_name = None
         start_line = 0
-        
+
         for i, line in enumerate(lines):
             # Check for function or class definition
             if line.strip().startswith(("def ", "class ", "async def ")):
@@ -303,7 +328,7 @@ class CodeParser:
                             metadata={"language": language},
                         )
                     )
-                
+
                 # Extract name
                 parts = line.strip().split()
                 if len(parts) > 1:
@@ -311,7 +336,7 @@ class CodeParser:
                     current_name = name_part.split("(")[0]
                 else:
                     current_name = None
-                
+
                 # Start new chunk
                 current_chunk = [line]
                 if line.strip().startswith("class "):
@@ -338,7 +363,7 @@ class CodeParser:
                     current_chunk = []
                     current_type = None
                     current_name = None
-        
+
         # Don't forget the last chunk
         if current_chunk:
             chunks.append(
@@ -351,18 +376,18 @@ class CodeParser:
                     metadata={"language": language},
                 )
             )
-        
+
         return chunks
-    
+
     def _simple_parse_javascript(
         self, lines: List[str], language: str
     ) -> List[CodeChunk]:
         """Simple JavaScript/TypeScript parsing based on braces.
-        
+
         Args:
             lines: Lines of code.
             language: Programming language name.
-            
+
         Returns:
             List of extracted code chunks.
         """
@@ -372,7 +397,7 @@ class CodeParser:
         current_name = None
         start_line = 0
         brace_count = 0
-        
+
         for i, line in enumerate(lines):
             # Check for function or class
             if any(keyword in line for keyword in ["function ", "class ", "=>"]):
@@ -390,7 +415,7 @@ class CodeParser:
                     )
                     current_chunk = []
                     start_line = i
-                
+
                 # Try to extract name
                 if "function " in line:
                     parts = line.split("function ")
@@ -411,12 +436,12 @@ class CodeParser:
                         parts = line.split("=")[0].strip().split()
                         if parts:
                             current_name = parts[-1]
-            
+
             current_chunk.append(line)
-            
+
             # Count braces
             brace_count += line.count("{") - line.count("}")
-            
+
             # If braces are balanced and we have content, save chunk
             if brace_count == 0 and current_chunk and i > start_line + 2:
                 chunks.append(
@@ -433,7 +458,7 @@ class CodeParser:
                 current_type = "code"
                 current_name = None
                 start_line = i + 1
-        
+
         # Last chunk
         if current_chunk:
             chunks.append(
@@ -446,25 +471,25 @@ class CodeParser:
                     metadata={"language": language},
                 )
             )
-        
+
         return chunks
-    
+
     def _chunk_by_paragraphs(
         self, lines: List[str], language: Optional[str]
     ) -> List[CodeChunk]:
         """Generic chunking by paragraphs (empty lines).
-        
+
         Args:
             lines: Lines of code.
             language: Programming language name.
-            
+
         Returns:
             List of extracted code chunks.
         """
         chunks = []
         current_chunk = []
         start_line = 0
-        
+
         for i, line in enumerate(lines):
             if line.strip():
                 current_chunk.append(line)
@@ -481,7 +506,7 @@ class CodeParser:
                     )
                     current_chunk = []
                     start_line = i + 1
-        
+
         # Last chunk
         if current_chunk:
             chunks.append(
@@ -493,7 +518,7 @@ class CodeParser:
                     metadata={"language": language or "unknown"},
                 )
             )
-        
+
         # If no chunks were created, make one big chunk
         if not chunks and lines:
             chunks.append(
@@ -505,5 +530,5 @@ class CodeParser:
                     metadata={"language": language or "unknown"},
                 )
             )
-        
+
         return chunks

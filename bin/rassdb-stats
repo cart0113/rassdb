@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Execute the RASSDB stats command
+exec python-main -m rassdb.cli.stats "$@"

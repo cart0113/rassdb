@@ -49,7 +49,7 @@ app.post('/api/search', async (req, res) => {
             query,
             '--semantic',
             '--limit', limit.toString(),
-            '--db', path.join(__dirname, '..', 'code_rag.db'),
+            '--db', path.join(__dirname, '.rassdb', 'example-chat-bot-nomic-embed-text-v1.5.rassdb'),
             '--format', 'json'
         ]);
         
@@ -109,7 +109,7 @@ app.post('/api/generate', async (req, res) => {
                 prompt,
                 '--semantic',
                 '--limit', '5',
-                '--db', path.join(__dirname, '..', 'code_rag.db'),
+                '--db', path.join(__dirname, '.rassdb', 'example-chat-bot-nomic-embed-text-v1.5.rassdb'),
                 '--format', 'json'
             ]);
             
@@ -266,7 +266,7 @@ app.delete('/api/history', async (req, res) => {
 app.get('/api/stats', async (req, res) => {
     try {
         const statsProcess = spawn('rassdb-stats', [
-            '--db', path.join(__dirname, '..', 'code_rag.db'),
+            '--db', path.join(__dirname, '.rassdb', 'example-chat-bot-nomic-embed-text-v1.5.rassdb'),
             '--format', 'json'
         ]);
         
@@ -290,6 +290,24 @@ app.get('/api/stats', async (req, res) => {
         });
     } catch (error) {
         res.json({});
+    }
+});
+
+// Get available models from Ollama
+app.get('/api/models', async (req, res) => {
+    try {
+        const response = await fetch('http://localhost:11434/api/tags');
+        if (!response.ok) {
+            throw new Error('Ollama not responding');
+        }
+        const data = await response.json();
+        res.json(data);
+    } catch (error) {
+        console.error('Failed to fetch models:', error);
+        res.status(503).json({ 
+            error: 'Ollama service not available',
+            models: []
+        });
     }
 });
 

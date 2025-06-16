@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RASSDB Chat Bot</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>RASSDB Chat Bot</h1>
+            <p class="subtitle">Query your codebase with natural language</p>
+        </header>
+        
+        <main>
+            <div class="chat-container">
+                <div id="chat-history" class="chat-history">
+                    <!-- Messages will be dynamically added here -->
+                </div>
+                
+                <form id="query-form" class="query-form">
+                    <div class="input-group">
+                        <input 
+                            type="text" 
+                            id="query-input" 
+                            class="query-input" 
+                            placeholder="Ask about your codebase..."
+                            autocomplete="off"
+                            required
+                        />
+                        <button type="submit" class="submit-btn">Send</button>
+                    </div>
+                    
+                    <div class="options">
+                        <label>
+                            Results: 
+                            <select id="top-k" class="select-input">
+                                <option value="3">3</option>
+                                <option value="5" selected>5</option>
+                                <option value="10">10</option>
+                            </select>
+                        </label>
+                    </div>
+                </form>
+            </div>
+            
+            <aside class="sidebar">
+                <h2>Session Info</h2>
+                <div id="session-info" class="session-info">
+                    <p>Session ID: <span id="session-id">Not initialized</span></p>
+                    <button id="clear-session" class="btn-secondary">Clear Session</button>
+                </div>
+                
+                <h2>Server Status</h2>
+                <div id="server-status" class="server-status">
+                    <p>Frontend: <span id="frontend-status" class="status-indicator">Checking...</span></p>
+                    <p>Backend: <span id="backend-status" class="status-indicator">Checking...</span></p>
+                </div>
+            </aside>
+        </main>
+        
+        <footer>
+            <p>RASSDB Chat Bot Example &copy; 2024</p>
+        </footer>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>
