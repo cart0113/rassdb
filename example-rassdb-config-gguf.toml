@@ -1,0 +1,24 @@
+# Example configuration for using nomic-embed-code GGUF model
+# Copy this to ~/.rassdb-config.toml to use the GGUF model by default
+
+[embedding-model]
+# Use the GGUF quantized version of nomic-embed-code
+# This is the 8-bit quantized version (~7GB) that runs locally
+name = "nomic-ai/nomic-embed-code-gguf"
+
+# Alternative: Use the shorter alias
+# name = "nomic-embed-code-gguf"
+
+# Note: This model requires llama-cpp-python to be installed:
+# pip install llama-cpp-python
+
+# The model file should be located at:
+# ~/.cache/huggingface/hub/models--nomic-ai--nomic-embed-code/blobs/nomic-embed-code.Q8_0.gguf
+
+# Other available models:
+# name = "nomic-ai/nomic-embed-text-v1.5"  # Default text embedding model
+# name = "nomic-ai/nomic-embed-code"       # Full precision code model (requires ~26GB)
+# name = "nomic-cloud/nomic-embed-code"    # Cloud API version (requires NOMIC_API_KEY)
+
+# Include/exclude patterns can be added here as well
+# See the main documentation for more configuration options
