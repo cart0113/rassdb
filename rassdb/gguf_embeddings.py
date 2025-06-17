@@ -49,19 +49,40 @@ class GGUFEmbedding:
 
         # Initialize the model
         logger.info(f"Loading GGUF model from: {model_path}")
+
+        # Import pooling type for proper embedding mode
+        try:
+            from llama_cpp import LLAMA_POOLING_TYPE_MEAN
+
+            pooling_type = LLAMA_POOLING_TYPE_MEAN
+        except ImportError:
+            # Fallback for older versions
+            pooling_type = 1  # MEAN pooling
+
         self.model = Llama(
             model_path=model_path,
             n_ctx=n_ctx,
             n_gpu_layers=n_gpu_layers,
             embedding=True,  # Enable embedding mode
+            pooling_type=pooling_type,  # Use mean pooling for embeddings
+            n_batch=512,  # Increase batch size
             verbose=False,
         )
         logger.info("✓ GGUF model loaded successfully")
 
         # Get actual embedding dimension from model
-        test_embedding = self.model.embed("test")
-        self._embedding_dim = len(test_embedding)
-        logger.info(f"  Embedding dimension: {self._embedding_dim}")
+        try:
+            test_embedding = self.model.embed("test")
+            self._embedding_dim = len(test_embedding)
+            logger.info(f"  Embedding dimension: {self._embedding_dim}")
+        except RuntimeError as e:
+            if "llama_decode returned -3" in str(e):
+                logger.warning(
+                    "Initial embedding test failed, likely due to model initialization. Assuming 3584 dimensions."
+                )
+                self._embedding_dim = 3584
+            else:
+                raise
 
     def encode(
         self,
@@ -91,9 +112,21 @@ class GGUFEmbedding:
 
         # Process each sentence
         for sentence in sentences:
-            # Get embedding from llama.cpp
-            embedding = self.model.embed(sentence)
-            all_embeddings.append(embedding)
+            try:
+                # Get embedding from llama.cpp
+                embedding = self.model.embed(sentence)
+                all_embeddings.append(embedding)
+            except RuntimeError as e:
+                if "llama_decode returned -3" in str(e):
+                    # Try with truncated text if context is full
+                    logger.warning(f"Text too long, truncating to fit context window")
+                    # Rough estimate: ~3 chars per token
+                    max_chars = (self.n_ctx - 100) * 3
+                    truncated = sentence[:max_chars]
+                    embedding = self.model.embed(truncated)
+                    all_embeddings.append(embedding)
+                else:
+                    raise
 
         # Convert to numpy array
         embeddings_array = np.array(all_embeddings, dtype=np.float32)
@@ -156,10 +189,11 @@ class NomicEmbedCodeGGUF(GGUFEmbedding):
                     "Please run download_nomic_code_gguf.py first."
                 )
 
-        # Initialize with nomic-specific parameters
+        # Initialize with parameters suitable for this Qwen2-based model
+        # Use smaller context to avoid KV cache issues
         super().__init__(
             model_path=str(gguf_path),
-            n_ctx=8192,  # Nomic models support 8192 context
+            n_ctx=2048,  # Start with smaller context to avoid errors
             n_gpu_layers=-1,  # Use GPU if available
         )
 

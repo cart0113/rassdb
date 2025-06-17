@@ -154,7 +154,7 @@ class CodebaseIndexer:
             # Check for model override in configs (project first, then global)
             # This will be set after _load_rassdb_config is called
             logger.info(f"Loading embedding model: {self.model_name}")
-            
+
             # Check if it's a cloud model first
             cloud_model = get_cloud_embedding_model(self.model_name)
             if cloud_model:
@@ -168,22 +168,28 @@ class CodebaseIndexer:
                     logger.info("✓ GGUF embedding model loaded")
                 else:
                     # Load from standard HuggingFace cache location
-                    self.model = SentenceTransformer(self.model_name, trust_remote_code=True)
+                    self.model = SentenceTransformer(
+                        self.model_name, trust_remote_code=True
+                    )
                     logger.info("✓ Local embedding model loaded")
-            
+
             # Initialize embedding strategy
             try:
                 self.embedding_strategy = get_embedding_strategy(self.model_name)
-                logger.info(f"✓ Using {self.embedding_strategy.__class__.__name__} strategy")
+                logger.info(
+                    f"✓ Using {self.embedding_strategy.__class__.__name__} strategy"
+                )
             except ValueError as e:
                 logger.error(str(e))
                 raise
-                
+
             # Initialize vector store with correct embedding dimension
             if self.vector_store is None:
                 # Always use the model's actual dimension
                 embedding_dim = self.model.get_sentence_embedding_dimension()
-                logger.info(f"Initializing vector store with dimension: {embedding_dim}")
+                logger.info(
+                    f"Initializing vector store with dimension: {embedding_dim}"
+                )
                 self.vector_store = VectorStore(self.db_path, embedding_dim)
 
     def _load_rassdb_config(self, base_path: Path) -> None:
@@ -368,18 +374,18 @@ class CodebaseIndexer:
         Returns:
             Text to be embedded with context.
         """
-        if hasattr(self, 'embedding_strategy') and self.embedding_strategy:
+        if hasattr(self, "embedding_strategy") and self.embedding_strategy:
             # Use the embedding strategy
             metadata = {
                 "file_path": file_path,
                 "language": language,
                 "file_name": chunk.metadata.get("file_name", ""),
             }
-            
+
             # Add any docstring if available
             if "docstring" in chunk.metadata:
                 metadata["docstring"] = chunk.metadata["docstring"]
-                
+
             return self.embedding_strategy.prepare_code(chunk, metadata)
         else:
             # Fallback to old behavior if strategy not initialized
@@ -394,7 +400,9 @@ class CodebaseIndexer:
 
             # Add parent class context if available
             if chunk.metadata.get("parent_class"):
-                context_comments.append(f"# Parent Class: {chunk.metadata['parent_class']}")
+                context_comments.append(
+                    f"# Parent Class: {chunk.metadata['parent_class']}"
+                )
 
             # Add function/method name if available
             if chunk.name:
@@ -427,7 +435,7 @@ class CodebaseIndexer:
         try:
             # Ensure embedding model and vector store are initialized
             self._init_embedding_model()
-            
+
             # Get file stats for change detection
             file_stats = file_path.stat()
             mtime = file_stats.st_mtime
@@ -457,11 +465,17 @@ class CodebaseIndexer:
             if not chunks:
                 # If no chunks found, index the whole file as one chunk
                 # Use strategy's ideal chunk size if available
-                if hasattr(self, 'embedding_strategy') and self.embedding_strategy and max_chunk_size is None:
-                    max_chunk_size = self.embedding_strategy.ideal_chunk_size["max_chars"]
+                if (
+                    hasattr(self, "embedding_strategy")
+                    and self.embedding_strategy
+                    and max_chunk_size is None
+                ):
+                    max_chunk_size = self.embedding_strategy.ideal_chunk_size[
+                        "max_chars"
+                    ]
                 elif max_chunk_size is None:
                     max_chunk_size = 3000
-                    
+
                 chunks = [
                     CodeChunk(
                         content=content[:max_chunk_size],
@@ -490,6 +504,10 @@ class CodebaseIndexer:
 
                 # Generate embedding
                 embedding = self.model.encode(embedding_text, normalize_embeddings=True)
+
+                # Ensure embedding is 1D array (some models return 2D array for single input)
+                if embedding.ndim == 2 and embedding.shape[0] == 1:
+                    embedding = embedding[0]
 
                 # Add chunk metadata
                 metadata = chunk.metadata.copy()
@@ -546,7 +564,7 @@ class CodebaseIndexer:
         # Load RASSDB configuration files if enabled
         if self.use_rassdb_config:
             self._load_rassdb_config(base_path)
-            
+
         # Initialize model and vector store early to get correct dimensions
         self._init_embedding_model()
 

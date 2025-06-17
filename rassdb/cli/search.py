@@ -28,7 +28,9 @@ logger = logging.getLogger(__name__)
 class SearchEngine:
     """Handles both semantic and literal search operations."""
 
-    def __init__(self, db_path: str, model_name: str = "nomic-ai/nomic-embed-text-v1.5"):
+    def __init__(
+        self, db_path: str, model_name: str = "nomic-ai/nomic-embed-text-v1.5"
+    ):
         """Initialize search engine.
 
         Args:
@@ -87,7 +89,9 @@ class SearchEngine:
                     self._model = gguf_model
                 else:
                     # Load from standard HuggingFace cache location
-                    self._model = SentenceTransformer(self.model_name, trust_remote_code=True)
+                    self._model = SentenceTransformer(
+                        self.model_name, trust_remote_code=True
+                    )
         return self._model
 
     def semantic_search(
@@ -108,6 +112,10 @@ class SearchEngine:
         Returns:
             List of search results with similarity scores.
         """
+        # Apply default pattern if none specified
+        if file_pattern is None:
+            file_pattern = r".*\.(py|pyx|pyi|js|jsx|ts|tsx|c|h|cpp|hpp|cc|cxx|go|rs|java|kt|swift|rb|php|cs|vb|r|m|scala|clj|ex|exs|erl|hrl|lua|pl|sh|bash|zsh|fish|ps1|yaml|yml|toml|ini|cfg|conf|env|dockerfile|makefile|cmake|gradle|rs|swift|kt|scala|clj|ex|exs|erl|hrl|lua|pl|proto|thrift|graphql|sql|css|scss|sass|less|html|htm|xml|rst|md)$"
+
         vector_store = VectorStore(self.db_path)
 
         # Use embedding strategy to prepare query
@@ -120,6 +128,10 @@ class SearchEngine:
 
         # Generate query embedding
         query_embedding = self.model.encode(query_text, normalize_embeddings=True)
+
+        # Ensure embedding is 1D array (some models return 2D array for single input)
+        if query_embedding.ndim == 2 and query_embedding.shape[0] == 1:
+            query_embedding = query_embedding[0]
 
         # Search for similar chunks
         results = vector_store.search_similar(
@@ -164,6 +176,10 @@ class SearchEngine:
         Returns:
             List of search results with match information.
         """
+        # Apply default pattern if none specified
+        if file_pattern is None:
+            file_pattern = r".*\.(py|pyx|pyi|js|jsx|ts|tsx|c|h|cpp|hpp|cc|cxx|go|rs|java|kt|swift|rb|php|cs|vb|r|m|scala|clj|ex|exs|erl|hrl|lua|pl|sh|bash|zsh|fish|ps1|yaml|yml|toml|ini|cfg|conf|env|dockerfile|makefile|cmake|gradle|rs|swift|kt|scala|clj|ex|exs|erl|hrl|lua|pl|proto|thrift|graphql|sql|css|scss|sass|less|html|htm|xml|rst|md)$"
+
         vector_store = VectorStore(self.db_path)
 
         # Build the search pattern
@@ -400,7 +416,11 @@ class ResultFormatter:
     help="Output format",
 )
 @click.option("--language", help="Filter by programming language")
-@click.option("--file", help="Filter by file pattern")
+@click.option(
+    "--file-pattern",
+    default=None,
+    help="Filter by file pattern (regex). Default: common code/doc extensions. Example: '.*\\.js$' for only JS files",
+)
 @click.option(
     "-i", "--ignore-case", is_flag=True, help="Case insensitive (literal search)"
 )
@@ -415,7 +435,7 @@ def main(
     limit: int,
     format: str,
     language: Optional[str],
-    file: Optional[str],
+    file_pattern: Optional[str],
     ignore_case: bool,
     regex: bool,
     word: bool,
@@ -470,7 +490,9 @@ def main(
 
         # Perform semantic search if requested
         if semantic:
-            semantic_results = engine.semantic_search(query, limit, language, file)
+            semantic_results = engine.semantic_search(
+                query, limit, language, file_pattern
+            )
             for r in semantic_results:
                 r["search_method"] = "semantic"
             all_results.extend(semantic_results)
@@ -483,7 +505,7 @@ def main(
                 regex=regex,
                 whole_word=word,
                 language=language,
-                file_pattern=file,
+                file_pattern=file_pattern,
                 limit=limit,
             )
             for r in literal_results:

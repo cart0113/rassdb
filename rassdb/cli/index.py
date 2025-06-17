@@ -115,7 +115,7 @@ def main(
 
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
-        raise click.Exit(1)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

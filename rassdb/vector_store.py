@@ -59,6 +59,19 @@ class VectorStore:
         sqlite_vec.load(self._conn)
         self._conn.enable_load_extension(False)
 
+        # Add REGEXP function
+        def regexp(pattern, string):
+            if pattern is None or string is None:
+                return False
+            import re
+
+            try:
+                return re.search(pattern, string) is not None
+            except re.error:
+                return False
+
+        self._conn.create_function("REGEXP", 2, regexp)
+
         # Create tables
         self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS code_chunks (
@@ -221,8 +234,8 @@ class VectorStore:
             params.append(language)
 
         if file_pattern:
-            where_clauses.append("c.file_path LIKE ?")
-            params.append(f"%{file_pattern}%")
+            where_clauses.append("c.file_path REGEXP ?")
+            params.append(file_pattern)
 
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
@@ -288,8 +301,8 @@ class VectorStore:
             params.append(language)
 
         if file_pattern:
-            where_clauses.append("c.file_path LIKE ?")
-            params.append(f"%{file_pattern}%")
+            where_clauses.append("c.file_path REGEXP ?")
+            params.append(file_pattern)
 
         where_clause = f"WHERE {' AND '.join(where_clauses)}"
 
