@@ -292,6 +292,10 @@ class CodeParser:
                         current_size = 0
                         chunk_start = start_line + 1
 
+                        # Track the original chunk boundaries
+                        original_start = start_line + 1
+                        original_end = end_line + 1
+
                         for i, line in enumerate(chunk_lines):
                             line_size = len(line) + 1  # +1 for newline
                             if (
@@ -311,6 +315,11 @@ class CodeParser:
                                             "language": language,
                                             "depth": depth,
                                             "part": True,
+                                            "original_start_line": original_start,
+                                            "original_end_line": original_end,
+                                            "original_type": config.node_types[
+                                                node.type
+                                            ],
                                         },
                                     )
                                 )
@@ -334,6 +343,9 @@ class CodeParser:
                                         "language": language,
                                         "depth": depth,
                                         "part": True,
+                                        "original_start_line": original_start,
+                                        "original_end_line": original_end,
+                                        "original_type": config.node_types[node.type],
                                     },
                                 )
                             )
@@ -348,12 +360,27 @@ class CodeParser:
                         ]
                         break
 
-                metadata = {"language": language, "depth": depth}
+                metadata = {
+                    "language": language,
+                    "depth": depth,
+                    "node_type": node.type,  # Original TreeSitter node type
+                }
 
                 # Add parent class for methods
                 chunk_type = config.node_types[node.type]
                 if chunk_type == "method" and current_class:
                     metadata["parent_class"] = current_class
+                elif chunk_type == "class" and name:
+                    metadata["class_name"] = name
+
+                # Add function/method name to metadata
+                if name and chunk_type in ["function", "method"]:
+                    metadata["function_name"] = name
+
+                # Add any docstring if we can find it
+                docstring = self._extract_docstring(node, lines, language)
+                if docstring:
+                    metadata["docstring"] = docstring
 
                 chunks.append(
                     CodeChunk(
@@ -372,6 +399,61 @@ class CodeParser:
 
         extract_chunks(tree.root_node)
         return chunks
+
+    def _extract_docstring(
+        self, node: tree_sitter.Node, lines: List[str], language: str
+    ) -> Optional[str]:
+        """Extract docstring from a function or class node if available.
+
+        Args:
+            node: The TreeSitter node.
+            lines: Source code lines.
+            language: Programming language.
+
+        Returns:
+            The docstring if found, None otherwise.
+        """
+        # Language-specific docstring extraction
+        if language == "python":
+            # Look for the first string literal in the body
+            for child in node.children:
+                if child.type == "block":
+                    for stmt in child.children:
+                        if stmt.type == "expression_statement":
+                            for expr_child in stmt.children:
+                                if expr_child.type == "string":
+                                    start_line = expr_child.start_point[0]
+                                    end_line = expr_child.end_point[0]
+                                    docstring_lines = lines[start_line : end_line + 1]
+                                    return "\n".join(docstring_lines).strip()
+                    break
+        elif language in ["javascript", "typescript", "java", "cpp", "c"]:
+            # Look for JSDoc or similar comment blocks before the node
+            if node.start_point[0] > 0:
+                # Check the line before for comment
+                prev_line = lines[node.start_point[0] - 1].strip()
+                if prev_line.startswith("/**") or prev_line.startswith("///"):
+                    # Found a doc comment, extract it
+                    doc_lines = []
+                    line_idx = node.start_point[0] - 1
+                    while line_idx >= 0:
+                        line = lines[line_idx].strip()
+                        if (
+                            line.startswith("/**")
+                            or line.startswith("/*")
+                            or line.startswith("*")
+                            or line.startswith("///")
+                        ):
+                            doc_lines.insert(0, line)
+                            if line.startswith("/**"):
+                                break
+                        else:
+                            break
+                        line_idx -= 1
+                    if doc_lines:
+                        return "\n".join(doc_lines)
+
+        return None
 
     def _simple_parse(
         self, content: str, language: Optional[str], max_chunk_size: int = 1500

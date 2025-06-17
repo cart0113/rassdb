@@ -385,6 +385,13 @@ class ResultFormatter:
             # File and location info
             output.append(f"File: {result['file_path']}")
             output.append(f"Lines: {result['start_line']}-{result['end_line']}")
+            
+            # Show part lines if different from full lines
+            if result.get('part_start_line') and result.get('part_end_line'):
+                if (result['part_start_line'] != result['start_line'] or 
+                    result['part_end_line'] != result['end_line']):
+                    output.append(f"Part Lines: {result['part_start_line']}-{result['part_end_line']}")
+            
             output.append(f"Type: {result['chunk_type']}")
             output.append(f"Language: {result['language']}")
 
@@ -432,36 +439,41 @@ class ResultFormatter:
 
         table_data = []
         for i, result in enumerate(results, 1):
-            if search_type == "semantic":
-                table_data.append(
-                    [
-                        i,
-                        result["file_path"],
-                        f"{result['start_line']}-{result['end_line']}",
-                        result["chunk_type"],
-                        result["language"],
-                        f"{result.get('similarity', 0):.3f}",
-                    ]
-                )
-            else:  # lexical
-                table_data.append(
-                    [
-                        i,
-                        result["file_path"],
-                        f"{result['start_line']}-{result['end_line']}",
-                        result["chunk_type"],
-                        result["language"],
-                        f"{result.get('similarity', 0):.3f}",
-                    ]
-                )
+            # Format the lines column
+            lines_str = f"{result['start_line']}-{result['end_line']}"
+            
+            # If this is a part and has different part lines, show both
+            if result.get('part_start_line') and result.get('part_end_line'):
+                if (result['part_start_line'] != result['start_line'] or 
+                    result['part_end_line'] != result['end_line']):
+                    # Show both original and part lines
+                    lines_str = f"{result['start_line']}-{result['end_line']}"
+                    part_lines_str = f"{result['part_start_line']}-{result['part_end_line']}"
+                else:
+                    part_lines_str = ""
+            else:
+                part_lines_str = ""
+            
+            table_data.append(
+                [
+                    i,
+                    result["file_path"],
+                    lines_str,
+                    part_lines_str,
+                    result["chunk_type"],
+                    result["language"],
+                    f"{result.get('similarity', 0):.3f}",
+                ]
+            )
 
         headers = [
             "#",
             "File",
-            "Lines",
+            "Full Lines",
+            "Part Lines",
             "Type",
             "Language",
-            "Score",  # Always show Score for consistency
+            "Score",
         ]
         return tabulate(table_data, headers=headers, tablefmt="grid")
 

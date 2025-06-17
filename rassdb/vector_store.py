@@ -83,7 +83,9 @@ class VectorStore:
                 end_line INTEGER,
                 chunk_type TEXT,
                 metadata TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                part_start_line INTEGER,
+                part_end_line INTEGER
             );
             
             CREATE INDEX IF NOT EXISTS idx_file_path ON code_chunks(file_path);
@@ -101,6 +103,28 @@ class VectorStore:
             
             CREATE INDEX IF NOT EXISTS idx_file_metadata_path ON file_metadata(file_path);
         """)
+
+        # Check if we need to add the new part_start_line and part_end_line columns
+        cursor = self._conn.cursor()
+        cursor.execute("PRAGMA table_info(code_chunks)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if "part_start_line" not in columns:
+            # Add the new columns
+            self._conn.execute(
+                "ALTER TABLE code_chunks ADD COLUMN part_start_line INTEGER"
+            )
+            self._conn.execute(
+                "ALTER TABLE code_chunks ADD COLUMN part_end_line INTEGER"
+            )
+            # Initialize with existing values for backward compatibility
+            self._conn.execute(
+                "UPDATE code_chunks SET part_start_line = start_line WHERE part_start_line IS NULL"
+            )
+            self._conn.execute(
+                "UPDATE code_chunks SET part_end_line = end_line WHERE part_end_line IS NULL"
+            )
+            self._conn.commit()
 
         # Create FTS5 virtual table for full-text search
         cursor = self._conn.cursor()
@@ -200,6 +224,8 @@ class VectorStore:
         end_line: Optional[int] = None,
         chunk_type: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        part_start_line: Optional[int] = None,
+        part_end_line: Optional[int] = None,
     ) -> int:
         """Add a code chunk with its embedding to the database.
 
@@ -208,22 +234,30 @@ class VectorStore:
             content: The code content.
             embedding: Embedding vector for the code.
             language: Programming language of the code.
-            start_line: Starting line number in the source file.
-            end_line: Ending line number in the source file.
+            start_line: Starting line number in the source file (original TreeSitter chunk).
+            end_line: Ending line number in the source file (original TreeSitter chunk).
             chunk_type: Type of code chunk (e.g., 'function', 'class').
             metadata: Additional metadata as a dictionary.
+            part_start_line: Starting line if this is part of a larger chunk.
+            part_end_line: Ending line if this is part of a larger chunk.
 
         Returns:
             The ID of the inserted chunk.
         """
         cursor = self.conn.cursor()
 
+        # If part lines are not provided, use the regular lines
+        if part_start_line is None:
+            part_start_line = start_line
+        if part_end_line is None:
+            part_end_line = end_line
+
         # Insert code chunk
         cursor.execute(
             """
             INSERT INTO code_chunks (file_path, content, language, start_line, 
-                                   end_line, chunk_type, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                                   end_line, chunk_type, metadata, part_start_line, part_end_line)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 file_path,
@@ -233,6 +267,8 @@ class VectorStore:
                 end_line,
                 chunk_type,
                 json.dumps(metadata) if metadata else None,
+                part_start_line,
+                part_end_line,
             ),
         )
 
@@ -301,6 +337,8 @@ class VectorStore:
                 c.end_line,
                 c.chunk_type,
                 c.metadata,
+                c.part_start_line,
+                c.part_end_line,
                 vec_distance_cosine(v.embedding, ?) as distance
             FROM vec_embeddings v
             JOIN code_chunks c ON v.rowid = c.id
@@ -375,6 +413,8 @@ class VectorStore:
                 c.end_line,
                 c.chunk_type,
                 c.metadata,
+                c.part_start_line,
+                c.part_end_line,
                 -fts.rank as score,
                 snippet(code_chunks_fts, 0, '<match>', '</match>', '...', 32) as snippet,
                 highlight(code_chunks_fts, 0, '<match>', '</match>') as highlighted_content

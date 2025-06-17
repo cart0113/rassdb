@@ -512,6 +512,26 @@ class CodebaseIndexer:
                 # Add chunk metadata
                 metadata = chunk.metadata.copy()
                 metadata["file_name"] = file_path.name
+                
+                # Extract original boundaries from metadata if this is a part
+                part_start_line = None
+                part_end_line = None
+                if chunk.chunk_type.endswith("_part"):
+                    # For parts, the chunk lines are the part lines
+                    part_start_line = chunk.start_line
+                    part_end_line = chunk.end_line
+                    # Get original boundaries from metadata if available
+                    if "original_start_line" in metadata:
+                        original_start = metadata.pop("original_start_line")
+                        original_end = metadata.pop("original_end_line")
+                    else:
+                        # Fallback to part lines if not in metadata
+                        original_start = chunk.start_line
+                        original_end = chunk.end_line
+                else:
+                    # For non-parts, original and part lines are the same
+                    original_start = chunk.start_line
+                    original_end = chunk.end_line
 
                 # Store in database
                 self.vector_store.add_code_chunk(
@@ -519,10 +539,12 @@ class CodebaseIndexer:
                     content=chunk.content,
                     embedding=embedding,
                     language=language,
-                    start_line=chunk.start_line,
-                    end_line=chunk.end_line,
+                    start_line=original_start,
+                    end_line=original_end,
                     chunk_type=chunk.chunk_type,
                     metadata=metadata,
+                    part_start_line=part_start_line,
+                    part_end_line=part_end_line,
                 )
 
             # Update file metadata after successful indexing
