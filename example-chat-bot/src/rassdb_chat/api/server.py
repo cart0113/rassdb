@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from ..core.chat_engine import ChatEngine
-from ..core.mcp import RASSDBMCPHandler
+from ..core.mcp_cli import RASSDBMCPHandler  # Use CLI version
 from ..models.chat import QueryRequest, QueryResponse, ChatSession, Message
 
 logging.basicConfig(level=logging.INFO)

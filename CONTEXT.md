@@ -108,6 +108,15 @@ RASSDB (Retrieval-Augmented Search and Semantic Database) is a lightweight, effi
 2. Console scripts not in PATH after pip install
    - Use `python-main -m rassdb.cli.command` as workaround
 
+3. Nomic Cloud API Integration (2025-06-17):
+   - Added support for cloud-based embeddings via Nomic API
+   - Created `nomic-cloud/nomic-embed-code` model option in embedding strategies
+   - API key is stored in ~/.bashrc as NOMIC_API_KEY
+   - Currently experiencing 503 errors when trying to use nomic-embed-code model via API
+   - The text models (nomic-embed-text-v1.5) work fine via API
+   - Local nomic-embed-code model (7B params) continues to work normally
+   - Cloud embedding infrastructure is in place and ready once API issues are resolved
+
 ## How to Use
 
 1. **Install RASSDB**:

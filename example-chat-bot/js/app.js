@@ -226,8 +226,10 @@ async function submitPrompt() {
     // Show RAG thinking indicator if enabled
     const useRAG = document.getElementById('ragToggle').checked;
     let ragThinking = null;
+    let ragStartTime = null;
     if (useRAG) {
         ragThinking = addRagThinkingIndicator();
+        ragStartTime = Date.now();
     }
     
     try {
@@ -243,13 +245,10 @@ async function submitPrompt() {
         
         if (!response.ok) throw new Error('Generation failed');
         
-        // Remove thinking indicator
-        thinkingDiv.remove();
-        
-        // Create AI message container
+        // Create AI message container (but don't add it yet)
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message ai';
-        document.getElementById('chatMessages').appendChild(messageDiv);
+        let messageAdded = false;
         
         // Stream response
         const reader = response.body.getReader();
@@ -275,13 +274,21 @@ async function submitPrompt() {
                                 ragThinking.remove();
                                 ragThinking = null;
                             }
-                            displayRagQuery(data.query);
+                            const ragEndTime = Date.now();
+                            const ragDuration = ragStartTime ? (ragEndTime - ragStartTime) / 1000 : null;
+                            displayRagQuery(data.query, ragDuration);
                             displayRagResults(data.results, data.formattedContext);
                         } else if (data.error) {
                             // Handle error in stream
                             messageDiv.innerHTML = `<span class="text-danger">Error: ${data.error}</span>`;
                             break;
                         } else if (data.response) {
+                            // Remove thinking indicator and add message div on first LLM response
+                            if (!messageAdded) {
+                                thinkingDiv.remove();
+                                document.getElementById('chatMessages').appendChild(messageDiv);
+                                messageAdded = true;
+                            }
                             responseText += data.response;
                             // Update content without rebuilding entire DOM
                             updateMessageContent(messageDiv, responseText);
@@ -407,11 +414,18 @@ function clearChat() {
 }
 
 // Display RAG query
-function displayRagQuery(query) {
+function displayRagQuery(query, duration) {
     const ragContainer = document.getElementById('ragResults');
     const queryDiv = document.createElement('div');
     queryDiv.className = 'rag-query';
+    
+    let timingText = '';
+    if (duration !== null && duration !== undefined) {
+        timingText = `<div class="rag-timing" style="color: #4caf50; font-weight: bold; margin-bottom: 0.5rem;">RAG results retrieved in ${duration.toFixed(2)} seconds</div>`;
+    }
+    
     queryDiv.innerHTML = `
+        ${timingText}
         <div class="rag-query-header">RAG Query:</div>
         <div class="rag-query-text">${escapeHtml(query)}</div>
     `;

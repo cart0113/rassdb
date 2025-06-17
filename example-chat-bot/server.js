@@ -204,18 +204,26 @@ app.post('/api/generate', async (req, res) => {
     // Add to prompt history
     promptHistory.push(prompt);
     
+    // Set up SSE immediately
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive'
+    });
+    
     let contextualPrompt = prompt;
     let ragContext = '';
+    let ragResults = null;
     
     // Search for relevant code context if RAG is enabled
     if (useRAG) {
         try {
+            const ragLimit = req.body.ragLimit || 5;
             const searchProcess = spawn(RASSDB_SEARCH, [
-                prompt,
-                '--semantic',
-                '--limit', '5',
-                '--db', path.join(__dirname, '.rassdb', 'example-chat-bot-nomic-embed-text-v1.5.rassdb'),
-                '--format', 'json'
+                '-s',  // Use semantic search
+                '--format', 'json',
+                '--limit', ragLimit.toString(),
+                prompt
             ]);
             
             let searchOutput = '';
@@ -244,6 +252,15 @@ app.post('/api/generate', async (req, res) => {
                                 });
                                 
                                 contextualPrompt = ragContext + '\nUser question: ' + prompt;
+                                ragResults = results;
+                                
+                                // Send RAG results immediately via SSE
+                                res.write(`data: ${JSON.stringify({
+                                    type: 'rag',
+                                    query: prompt,
+                                    results: results,
+                                    formattedContext: ragContext
+                                })}\n\n`);
                             }
                         } catch (e) {
                             console.error('Failed to parse RAG results:', e);
@@ -283,13 +300,6 @@ app.post('/api/generate', async (req, res) => {
         if (!response.ok) {
             throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
         }
-        
-        // Set up SSE
-        res.writeHead(200, {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive'
-        });
         
         let fullResponse = '';
         

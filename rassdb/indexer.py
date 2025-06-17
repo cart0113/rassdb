@@ -18,6 +18,7 @@ import fnmatch
 from rassdb.vector_store import VectorStore
 from rassdb.code_parser import CodeParser, CodeChunk
 from rassdb.embedding_strategies import get_embedding_strategy, EmbeddingStrategy
+from rassdb.cloud_embeddings import get_cloud_embedding_model
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,7 @@ class CodebaseIndexer:
     def __init__(
         self,
         db_path: str = "code_rag.db",
-        model_name: str = "nomic-ai/CodeRankEmbed",
+        model_name: str = "nomic-ai/nomic-embed-text-v1.5",
         embedding_dim: int = 768,
         code_extensions: Optional[Set[str]] = None,
         ignore_patterns: Optional[Set[str]] = None,
@@ -152,9 +153,16 @@ class CodebaseIndexer:
             # Check for model override in configs (project first, then global)
             # This will be set after _load_rassdb_config is called
             logger.info(f"Loading embedding model: {self.model_name}")
-            # Load from standard HuggingFace cache location
-            self.model = SentenceTransformer(self.model_name, trust_remote_code=True)
-            logger.info("✓ Embedding model loaded")
+            
+            # Check if it's a cloud model first
+            cloud_model = get_cloud_embedding_model(self.model_name)
+            if cloud_model:
+                self.model = cloud_model
+                logger.info("✓ Cloud embedding model loaded")
+            else:
+                # Load from standard HuggingFace cache location
+                self.model = SentenceTransformer(self.model_name, trust_remote_code=True)
+                logger.info("✓ Local embedding model loaded")
             
             # Initialize embedding strategy
             try:

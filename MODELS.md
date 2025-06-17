@@ -1,16 +1,44 @@
 # Supported Embedding Models in RASSDB
 
-RASSDB supports exactly 4 code embedding models, each optimized for different use cases:
+RASSDB supports 5 embedding models, each optimized for different use cases:
 
-## 1. CodeRankEmbed (Recommended Default)
+## 1. Nomic Embed Text v1.5 (Default)
+**Model ID:** `nomic-ai/nomic-embed-text-v1.5`
+
+### Why It's The Default
+- **Best for natural language queries** about code functionality
+- General-purpose text model that works well with both code and natural language
+- Excellent performance on semantic similarity tasks
+- Supports 8192 token context length
+- No special query prefix required
+
+### Usage Strategy
+- **Code chunks:** Enhanced with class/function names as comments
+- **Queries:** Natural language queries work as-is
+- **Ideal chunk size:** 100-300 lines or 2,000-8,000 characters
+
+### Example
+```python
+# Class: UserManager
+# Function: register_user
+# Type: function
+# File: src/auth/users.py
+
+def register_user(username, email, password):
+    user = User(username=username, email=email)
+    user.set_password(password)
+    db.session.add(user)
+    db.session.commit()
+    return user
+```
+
+## 2. CodeRankEmbed
 **Model ID:** `nomic-ai/CodeRankEmbed`
 
-### Why It's Recommended
-- **Best for AI coding agents** that need to understand existing code and respond to natural language queries
-- Specifically designed for code retrieval from natural language queries
-- Outperforms OpenAI-v3-large and CodeSage-large by 13.80% and 16.81% on code retrieval
-- Supports 8192 token context length, allowing for larger code chunks
-- Simple integration with no complex metadata preparation needed
+### Best For
+- Code-specific semantic search with explicit query prefixing
+- When you need different handling for queries vs code
+- Projects where code structure is more important than natural language understanding
 
 ### Usage Strategy
 - **Code chunks:** Index raw code without modification
@@ -31,7 +59,7 @@ def register_user(username, email, password):
     return user
 ```
 
-## 2. Nomic Embed Code
+## 3. Nomic Embed Code
 **Model ID:** `nomic-ai/nomic-embed-code`
 
 ### Best For
@@ -47,7 +75,7 @@ def register_user(username, email, password):
 ### Note
 This model is not included in the download script due to size constraints but is fully supported by RASSDB.
 
-## 3. CodeBERT
+## 4. CodeBERT
 **Model ID:** `microsoft/codebert-base`
 
 ### Best For
@@ -83,7 +111,7 @@ def calculate_fibonacci(n: int) -> int:
     return curr
 ```
 
-## 4. Qodo-Embed-1.5B
+## 5. Qodo-Embed-1.5B
 **Model ID:** `Qodo/Qodo-Embed-1-1.5B`
 
 ### Best For
@@ -112,42 +140,59 @@ def calculate_fibonacci(n: int) -> int:
     return curr
 ```
 
+
 ## Model Selection Guide
 
 | Use Case | Recommended Model | Why |
 |----------|------------------|-----|
-| AI coding assistant | CodeRankEmbed | Optimized for NL→code queries, large context |
-| Code similarity search | Nomic Embed Code | Best code-to-code similarity |
+| Natural language queries | Nomic Embed Text v1.5 | Best NL understanding, no prefix needed |
+| AI coding assistant | CodeRankEmbed | Optimized for NL→code with prefix |
+| Code similarity search | Nomic Embed Code | Best code-to-code similarity (7B params) |
 | Documentation-heavy projects | CodeBERT | Excels with rich docstrings |
 | Enterprise RAG systems | Qodo-Embed-1.5B | Structured metadata support |
 
 ## Downloading Models
 
-Use the provided script to download the models (except Nomic Embed Code due to size):
+Use the provided script to download the models:
 
 ```bash
 python download_models.py
 ```
 
-This will download:
+This will download standard models:
 - CodeBERT (~420MB)
 - Qodo-Embed-1.5B (~6.2GB)
 - CodeRankEmbed (~550MB)
+- Nomic Embed Text v1.5 (~550MB)
+
+Optionally, you can also download:
+- Nomic Embed Code (~14GB for 7B params) - Excellent for code-to-code similarity
 
 ## Using a Specific Model
 
 You can specify which model to use during indexing:
 
 ```bash
-# Use the default (CodeRankEmbed)
+# Use the default (Nomic Embed Text v1.5)
 rassdb index /path/to/code
 
 # Use a specific model
 rassdb index --model microsoft/codebert-base /path/to/code
 rassdb index --model Qodo/Qodo-Embed-1-1.5B /path/to/code
 rassdb index --model nomic-ai/nomic-embed-code /path/to/code
+rassdb index --model nomic-ai/CodeRankEmbed /path/to/code
+rassdb index --model dunzhang/stella_en_400M_v5 /path/to/code
 ```
 
 ## Error Handling
 
-If you try to use an unsupported model, RASSDB will show an error with the list of supported models. Only the 4 models listed above are supported - no other embedding models will work with RASSDB.
+If you try to use an unsupported model, RASSDB will show an error with the list of supported models. Only the 6 models listed above are supported - no other embedding models will work with RASSDB.
+
+## Model Recommendations by Resource Constraints
+
+| Available RAM | Recommended Model | Why |
+|--------------|------------------|-----|
+| < 8GB | CodeBERT | Smallest model, still effective |
+| 8-16GB | Stella_en_400M_v5 | Best performance/size ratio |
+| 16-32GB | Nomic Embed Text v1.5 (default) | Excellent for natural language |
+| > 32GB | Nomic Embed Code | Best for code-specific tasks |

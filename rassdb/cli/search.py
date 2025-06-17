@@ -19,6 +19,7 @@ import numpy as np
 from rassdb.vector_store import VectorStore
 from rassdb.utils.db_discovery import discover_database
 from rassdb.embedding_strategies import get_embedding_strategy
+from rassdb.cloud_embeddings import get_cloud_embedding_model
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 class SearchEngine:
     """Handles both semantic and literal search operations."""
 
-    def __init__(self, db_path: str, model_name: str = "nomic-ai/CodeRankEmbed"):
+    def __init__(self, db_path: str, model_name: str = "nomic-ai/nomic-embed-text-v1.5"):
         """Initialize search engine.
 
         Args:
@@ -71,11 +72,16 @@ class SearchEngine:
             self.model_name = config["embedding-model"]["name"]
 
     @property
-    def model(self) -> SentenceTransformer:
+    def model(self):
         """Lazy load the embedding model."""
         if self._model is None:
-            # Load from standard HuggingFace cache location
-            self._model = SentenceTransformer(self.model_name, trust_remote_code=True)
+            # Check if it's a cloud model first
+            cloud_model = get_cloud_embedding_model(self.model_name)
+            if cloud_model:
+                self._model = cloud_model
+            else:
+                # Load from standard HuggingFace cache location
+                self._model = SentenceTransformer(self.model_name, trust_remote_code=True)
         return self._model
 
     def semantic_search(

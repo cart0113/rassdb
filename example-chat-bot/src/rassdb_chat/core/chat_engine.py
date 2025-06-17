@@ -1,6 +1,7 @@
 """Chat engine that integrates with RASSDB MCP."""
 
 import asyncio
+import logging
 import uuid
 from datetime import datetime
 from typing import List, Optional
@@ -63,12 +64,19 @@ class ChatEngine:
         )
         session.messages.append(user_message)
         
-        # Query RASSDB through MCP
-        results = await self.mcp_handler.query(
-            query_text=request.query,
-            top_k=request.top_k,
-            filters=request.filters
-        )
+        # Query RASSDB through MCP with timeout
+        try:
+            results = await asyncio.wait_for(
+                self.mcp_handler.query(
+                    query_text=request.query,
+                    top_k=request.top_k,
+                    filters=request.filters
+                ),
+                timeout=30.0  # 30 second timeout
+            )
+        except asyncio.TimeoutError:
+            logging.error(f"[ChatEngine] Query timed out after 30 seconds")
+            results = []
         
         # Generate assistant response based on results
         if results:
