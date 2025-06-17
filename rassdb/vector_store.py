@@ -102,6 +102,54 @@ class VectorStore:
             CREATE INDEX IF NOT EXISTS idx_file_metadata_path ON file_metadata(file_path);
         """)
 
+        # Create FTS5 virtual table for full-text search
+        cursor = self._conn.cursor()
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='code_chunks_fts'
+        """)
+
+        if not cursor.fetchone():
+            # Create FTS5 table with advanced tokenization
+            self._conn.execute("""
+                CREATE VIRTUAL TABLE code_chunks_fts USING fts5(
+                    content,
+                    file_path UNINDEXED,
+                    chunk_type UNINDEXED,
+                    language UNINDEXED,
+                    content=code_chunks,
+                    content_rowid=id,
+                    tokenize='unicode61 remove_diacritics 2'
+                );
+            """)
+
+            # Create triggers to keep FTS5 table in sync
+            self._conn.executescript("""
+                CREATE TRIGGER IF NOT EXISTS code_chunks_ai AFTER INSERT ON code_chunks BEGIN
+                    INSERT INTO code_chunks_fts(rowid, content, file_path, chunk_type, language)
+                    VALUES (new.id, new.content, new.file_path, new.chunk_type, new.language);
+                END;
+                
+                CREATE TRIGGER IF NOT EXISTS code_chunks_au AFTER UPDATE ON code_chunks BEGIN
+                    UPDATE code_chunks_fts 
+                    SET content = new.content, 
+                        file_path = new.file_path,
+                        chunk_type = new.chunk_type,
+                        language = new.language
+                    WHERE rowid = new.id;
+                END;
+                
+                CREATE TRIGGER IF NOT EXISTS code_chunks_ad AFTER DELETE ON code_chunks BEGIN
+                    DELETE FROM code_chunks_fts WHERE rowid = old.id;
+                END;
+            """)
+
+            # Populate FTS5 table with existing data
+            self._conn.execute("""
+                INSERT INTO code_chunks_fts(rowid, content, file_path, chunk_type, language)
+                SELECT id, content, file_path, chunk_type, language FROM code_chunks;
+            """)
+
         # Create vector table with proper configuration
         cursor = self._conn.cursor()
         cursor.execute("""
@@ -272,29 +320,37 @@ class VectorStore:
 
         return results
 
-    def search_literal(
+    def search_lexical(
         self,
         query: str,
         limit: int = 50,
         language: Optional[str] = None,
         file_pattern: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Search for code chunks containing literal text.
+        """Search for code chunks using FTS5 with BM25 ranking.
 
         Args:
-            query: The text to search for.
+            query: The text to search for. Supports FTS5 query syntax:
+                   - "term1 term2" for AND search
+                   - "term1 OR term2" for OR search
+                   - "\"exact phrase\"" for phrase search
+                   - "term*" for prefix search
+                   - "term1 NEAR(term2, 10)" for proximity search
             limit: Maximum number of results to return.
             language: Filter by programming language.
             file_pattern: Filter by file path pattern.
 
         Returns:
-            List of dictionaries containing matching code chunks.
+            List of dictionaries containing matching code chunks with BM25 scores.
         """
         cursor = self.conn.cursor()
 
-        # Build WHERE clause
-        where_clauses = ["c.content LIKE ?"]
-        params = [f"%{query}%"]
+        # Prepare FTS5 query - escape special characters if needed
+        fts_query = query
+
+        # Build WHERE clauses for additional filters
+        where_clauses = []
+        params = []
 
         if language:
             where_clauses.append("c.language = ?")
@@ -304,8 +360,11 @@ class VectorStore:
             where_clauses.append("c.file_path REGEXP ?")
             params.append(file_pattern)
 
-        where_clause = f"WHERE {' AND '.join(where_clauses)}"
+        where_clause = ""
+        if where_clauses:
+            where_clause = "AND " + " AND ".join(where_clauses)
 
+        # Use FTS5 with BM25 ranking
         query_sql = f"""
             SELECT 
                 c.id,
@@ -315,20 +374,47 @@ class VectorStore:
                 c.start_line,
                 c.end_line,
                 c.chunk_type,
-                c.metadata
+                c.metadata,
+                -fts.rank as score,
+                snippet(code_chunks_fts, 0, '<match>', '</match>', '...', 32) as snippet,
+                highlight(code_chunks_fts, 0, '<match>', '</match>') as highlighted_content
             FROM code_chunks c
+            JOIN code_chunks_fts fts ON c.id = fts.rowid
+            WHERE code_chunks_fts MATCH ?
             {where_clause}
-            ORDER BY c.file_path, c.start_line
+            ORDER BY rank
             LIMIT ?
         """
 
-        cursor.execute(query_sql, params + [limit])
+        try:
+            cursor.execute(query_sql, [fts_query] + params + [limit])
+        except sqlite3.OperationalError as e:
+            # Fallback to simple token search if FTS5 query syntax is invalid
+            if "fts5: syntax error" in str(e):
+                # Escape special characters and retry with phrase search
+                fts_query = '"' + query.replace('"', '""') + '"'
+                cursor.execute(query_sql, [fts_query] + params + [limit])
+            else:
+                raise
 
         results = []
         for row in cursor.fetchall():
             result = dict(row)
             if result["metadata"]:
                 result["metadata"] = json.loads(result["metadata"])
+
+            # Calculate a normalized similarity score from BM25 rank
+            # BM25 scores are negative, with closer to 0 being better
+            # Normalize to 0-1 range where 1 is best match
+            bm25_score = result.pop("score", 0)
+            result["similarity"] = 1.0 / (1.0 + abs(bm25_score))
+
+            # Clean up snippet and highlighted content
+            result["snippet"] = result.get("snippet", "").strip()
+
+            # Remove highlighted content if not needed to save space
+            result.pop("highlighted_content", None)
+
             results.append(result)
 
         return results

@@ -1,7 +1,7 @@
-"""Search command for RASSDB - unified semantic and literal code search.
+"""Search command for RASSDB - unified semantic and lexical code search.
 
 This module provides the CLI interface for searching code using both
-semantic (embedding-based) and literal (grep-like) search methods.
+semantic (embedding-based) and lexical (grep-like) search methods.
 """
 
 import sys
@@ -26,20 +26,25 @@ logger = logging.getLogger(__name__)
 
 
 class SearchEngine:
-    """Handles both semantic and literal search operations."""
+    """Handles both semantic and lexical search operations."""
 
     def __init__(
-        self, db_path: str, model_name: str = "nomic-ai/nomic-embed-text-v1.5"
+        self,
+        db_path: str,
+        model_name: str = "nomic-ai/nomic-embed-text-v1.5",
+        lazy_load: bool = True,
     ):
         """Initialize search engine.
 
         Args:
             db_path: Path to the database.
             model_name: Name of the embedding model.
+            lazy_load: Whether to lazy load the embedding model.
         """
         self.db_path = db_path
         self.model_name = model_name
         self._model: Optional[SentenceTransformer] = None
+        self.lazy_load = lazy_load
         self._load_global_config()
 
     def _load_global_config(self):
@@ -77,7 +82,8 @@ class SearchEngine:
     @property
     def model(self):
         """Lazy load the embedding model."""
-        if self._model is None:
+        if self._model is None and self.lazy_load:
+            logger.info(f"Loading embedding model: {self.model_name}")
             # Check if it's a cloud model first
             cloud_model = get_cloud_embedding_model(self.model_name)
             if cloud_model:
@@ -152,7 +158,7 @@ class SearchEngine:
 
         return results
 
-    def literal_search(
+    def lexical_search(
         self,
         pattern: str,
         case_sensitive: bool = False,
@@ -162,12 +168,12 @@ class SearchEngine:
         file_pattern: Optional[str] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
-        """Perform literal text search (grep-like).
+        """Perform lexical text search using FTS5.
 
         Args:
-            pattern: Search pattern.
-            case_sensitive: Whether to use case-sensitive matching.
-            regex: Whether pattern is a regex.
+            pattern: Search pattern. Supports FTS5 query syntax.
+            case_sensitive: Whether to use case-sensitive matching (Note: FTS5 is case-insensitive).
+            regex: Whether pattern is a regex (Note: FTS5 uses its own syntax).
             whole_word: Whether to match whole words only.
             language: Filter by programming language.
             file_pattern: Filter by file path pattern.
@@ -182,71 +188,173 @@ class SearchEngine:
 
         vector_store = VectorStore(self.db_path)
 
-        # Build the search pattern
-        if regex:
-            search_pattern = pattern
-        else:
-            search_pattern = re.escape(pattern)
+        # Convert pattern to FTS5 query syntax
+        fts_query: str = pattern
 
+        # Handle whole word matching
         if whole_word:
-            search_pattern = r"\b" + search_pattern + r"\b"
+            # In FTS5, we can use quotes for exact word matching
+            words = pattern.split()
+            fts_query = " ".join(f'"{word}"' for word in words)
+        elif not regex:
+            # For non-regex patterns, decide based on query complexity
+            # If it looks like a natural language query, use token-based search
+            # If it's a simple term or code snippet, use phrase search
+            if len(pattern.split()) > 3 or any(
+                word in pattern.lower()
+                for word in ["how", "what", "where", "when", "why", "does"]
+            ):
+                # Natural language query - search for all tokens
+                # Remove common stop words and punctuation
+                import string
 
-        # Compile regex
-        flags = 0 if case_sensitive else re.IGNORECASE
-        regex_pattern = re.compile(search_pattern, flags)
+                # Remove "query:" prefix if present
+                clean_pattern = pattern
+                if clean_pattern.lower().startswith("query:"):
+                    clean_pattern = clean_pattern[6:].strip()
 
-        # Search in database
-        chunks = vector_store.search_literal(
-            "",  # We'll filter with regex in Python
-            limit=limit * 10,  # Get more to filter
+                words = clean_pattern.translate(
+                    str.maketrans("", "", string.punctuation)
+                ).split()
+                # Filter out very common words that don't add search value
+                # Common English stop words that don't add search value
+                stop_words = {
+                    "the",
+                    "a",
+                    "an",
+                    "and",
+                    "or",
+                    "but",
+                    "in",
+                    "on",
+                    "at",
+                    "to",
+                    "for",
+                    "of",
+                    "with",
+                    "by",
+                    "from",
+                    "is",
+                    "are",
+                    "was",
+                    "were",
+                    "been",
+                    "be",
+                    "have",
+                    "has",
+                    "had",
+                    "do",
+                    "does",
+                    "did",
+                    "will",
+                    "would",
+                    "could",
+                    "should",
+                    "may",
+                    "might",
+                    "must",
+                    "can",
+                    "this",
+                    "that",
+                    "these",
+                    "those",
+                    "i",
+                    "you",
+                    "he",
+                    "she",
+                    "it",
+                    "we",
+                    "they",
+                    "them",
+                    "their",
+                    "what",
+                    "which",
+                    "who",
+                    "when",
+                    "where",
+                    "why",
+                    "how",
+                    "all",
+                    "each",
+                    "every",
+                    "some",
+                    "any",
+                    "few",
+                    "more",
+                    "most",
+                    "other",
+                    "into",
+                    "through",
+                    "during",
+                    "before",
+                    "after",
+                    "above",
+                    "below",
+                    "between",
+                    "under",
+                    "again",
+                    "further",
+                    "then",
+                    "once",
+                    "out",
+                    "call",
+                }
+                meaningful_words = [
+                    w for w in words if w.lower() not in stop_words and len(w) > 1
+                ]
+                if meaningful_words:
+                    # Use OR operator between terms for more flexible matching
+                    # This finds documents containing ANY of the meaningful terms
+                    fts_query = " OR ".join(meaningful_words)
+                else:
+                    # Fallback to original query if no meaningful words
+                    fts_query = pattern
+            else:
+                # Short query or code snippet - use phrase search
+                fts_query = '"' + pattern.replace('"', '""') + '"'
+
+        # Search using FTS5
+        results = vector_store.search_lexical(
+            fts_query,
+            limit=limit,
             language=language,
             file_pattern=file_pattern,
         )
 
-        results = []
-        for chunk in chunks:
-            # Search for pattern in content
-            matches = list(regex_pattern.finditer(chunk["content"]))
-            if matches:
-                # Calculate match score based on frequency
-                match_score = min(1.0, len(matches) / 10.0)  # Cap at 10 matches
+        # Process results to extract match information
+        for result in results:
+            # Extract matches from snippet if available
+            snippet = result.get("snippet", "")
+            matches = []
 
-                # Find matching lines
-                lines = chunk["content"].split("\n")
-                matching_lines = []
+            if snippet:
+                # Find <match> tags in snippet
+                import re
 
-                for match in matches:
-                    pos = 0
-                    for i, line in enumerate(lines):
-                        if pos <= match.start() < pos + len(line) + 1:
-                            line_num = chunk["start_line"] + i
-                            matching_lines.append(
-                                {
-                                    "line_num": line_num,
-                                    "line": line.strip(),
-                                    "match": match.group(),
-                                }
-                            )
-                            break
-                        pos += len(line) + 1
+                match_pattern = re.compile(r"<match>(.*?)</match>")
+                snippet_matches = match_pattern.findall(snippet)
 
-                result = chunk.copy()
-                result.update(
-                    {
-                        "distance": 1.0 - match_score,
-                        "similarity": match_score,
-                        "search_type": "literal",
-                        "matches": matching_lines,
-                        "match_count": len(matches),
-                    }
-                )
-                results.append(result)
+                # Create match info
+                for match_text in snippet_matches[:5]:  # Limit to first 5 matches
+                    matches.append(
+                        {
+                            "match": match_text,
+                            "line": snippet,  # Full snippet as context
+                        }
+                    )
+
+            result["search_type"] = "lexical"
+            result["matches"] = matches
+            result["match_count"] = (
+                len(matches) if matches else 1
+            )  # At least 1 match if result returned
+
+            # Remove internal fields
+            result.pop("snippet", None)
 
         vector_store.close()
 
-        # Sort by match score and limit
-        results.sort(key=lambda x: x["distance"])
-        return results[:limit]
+        return results
 
 
 class ResultFormatter:
@@ -283,7 +391,7 @@ class ResultFormatter:
             # Relevance info
             if search_type == "semantic":
                 output.append(f"Relevance Score: {result.get('similarity', 0):.3f}")
-            else:  # literal
+            else:  # lexical
                 output.append(f"Match Count: {result.get('match_count', 0)}")
                 if result.get("matches"):
                     output.append(
@@ -335,7 +443,7 @@ class ResultFormatter:
                         f"{result.get('similarity', 0):.3f}",
                     ]
                 )
-            else:  # literal
+            else:  # lexical
                 table_data.append(
                     [
                         i,
@@ -343,7 +451,7 @@ class ResultFormatter:
                         f"{result['start_line']}-{result['end_line']}",
                         result["chunk_type"],
                         result["language"],
-                        result.get("match_count", 0),
+                        f"{result.get('similarity', 0):.3f}",
                     ]
                 )
 
@@ -353,7 +461,7 @@ class ResultFormatter:
             "Lines",
             "Type",
             "Language",
-            "Score" if search_type == "semantic" else "Matches",
+            "Score",  # Always show Score for consistency
         ]
         return tabulate(table_data, headers=headers, tablefmt="grid")
 
@@ -384,7 +492,7 @@ class ResultFormatter:
         """
         output = []
         for result in results:
-            if search_type == "literal" and result.get("matches"):
+            if search_type == "lexical" and result.get("matches"):
                 # Show individual match lines
                 for match in result["matches"]:
                     output.append(
@@ -401,7 +509,7 @@ class ResultFormatter:
 @click.command(name="rassdb-search")
 @click.argument("query")
 @click.option("--semantic", "-s", is_flag=True, help="Use semantic search (embeddings)")
-@click.option("--literal", "-l", is_flag=True, help="Use literal search (grep-like)")
+@click.option("--lexical", "-l", is_flag=True, help="Use lexical search (grep-like)")
 @click.option(
     "--db",
     default=None,
@@ -422,15 +530,15 @@ class ResultFormatter:
     help="Filter by file pattern (regex). Default: common code/doc extensions. Example: '.*\\.js$' for only JS files",
 )
 @click.option(
-    "-i", "--ignore-case", is_flag=True, help="Case insensitive (literal search)"
+    "-i", "--ignore-case", is_flag=True, help="Case insensitive (lexical search)"
 )
-@click.option("-E", "--regex", is_flag=True, help="Use regex (literal search)")
-@click.option("-w", "--word", is_flag=True, help="Match whole words (literal search)")
+@click.option("-E", "--regex", is_flag=True, help="Use regex (lexical search)")
+@click.option("-w", "--word", is_flag=True, help="Match whole words (lexical search)")
 @click.option("--show", is_flag=True, help="Alias for --format show")
 def main(
     query: str,
     semantic: bool,
-    literal: bool,
+    lexical: bool,
     db: str,
     limit: int,
     format: str,
@@ -441,17 +549,18 @@ def main(
     word: bool,
     show: bool,
 ) -> None:
-    """Unified code search tool supporting semantic and literal search.
+    """Unified code search tool supporting semantic and lexical search.
 
-    You must specify at least one search type: --semantic (-s) or --literal (-l).
-    Both can be used together for comprehensive results.
+    By default, both semantic and lexical search are performed.
+    You can specify search types with --semantic (-s) or --lexical (-l) to use only one.
+    Both can be used together explicitly for comprehensive results.
 
     Examples:
 
         # Semantic search for similar concepts
         rassdb-search -s "error handling"
 
-        # Literal search for exact text
+        # Lexical search for exact text
         rassdb-search -l ".tick"
 
         # Both searches combined
@@ -470,47 +579,50 @@ def main(
     if show:
         format = "show"
 
-    # Validate that at least one search type is specified
-    if not semantic and not literal:
-        click.echo(
-            "Error: You must specify at least one search type: --semantic (-s) or --literal (-l)",
-            err=True,
-        )
-        click.echo("Use --help for more information.", err=True)
-        sys.exit(1)
+    # Default to both search types if none specified
+    if not semantic and not lexical:
+        semantic = True
+        lexical = True
 
     try:
         # Discover database if not specified
         db_path = discover_database(db)
 
-        engine = SearchEngine(db_path)
+        # Only load models if semantic search is requested
+        engine = SearchEngine(db_path, lazy_load=True)
         formatter = ResultFormatter()
 
         all_results = []
 
+        # If both search types are used, limit each to 5 results
+        search_limit = 5 if (semantic and lexical) else limit
+
         # Perform semantic search if requested
         if semantic:
             semantic_results = engine.semantic_search(
-                query, limit, language, file_pattern
+                query, search_limit, language, file_pattern
             )
             for r in semantic_results:
                 r["search_method"] = "semantic"
             all_results.extend(semantic_results)
 
-        # Perform literal search if requested
-        if literal:
-            literal_results = engine.literal_search(
+        # Perform lexical search if requested
+        if lexical:
+            lexical_results = engine.lexical_search(
                 query,
                 case_sensitive=not ignore_case,
                 regex=regex,
                 whole_word=word,
                 language=language,
                 file_pattern=file_pattern,
-                limit=limit,
+                limit=search_limit,
             )
-            for r in literal_results:
-                r["search_method"] = "literal"
-            all_results.extend(literal_results)
+            for r in lexical_results:
+                r["search_method"] = "lexical"
+            all_results.extend(lexical_results)
+
+        # Sort results by similarity score (highest first)
+        all_results.sort(key=lambda x: x.get("similarity", 0), reverse=True)
 
         # Format output
         if format == "show":
