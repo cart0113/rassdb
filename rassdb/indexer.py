@@ -17,6 +17,7 @@ import fnmatch
 
 from rassdb.vector_store import VectorStore
 from rassdb.code_parser import CodeParser, CodeChunk
+from rassdb.embedding_strategies import get_embedding_strategy, EmbeddingStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,7 @@ class CodebaseIndexer:
     def __init__(
         self,
         db_path: str = "code_rag.db",
-        model_name: str = "nomic-ai/nomic-embed-code-v1.5",
+        model_name: str = "nomic-ai/CodeRankEmbed",
         embedding_dim: int = 768,
         code_extensions: Optional[Set[str]] = None,
         ignore_patterns: Optional[Set[str]] = None,
@@ -129,10 +130,11 @@ class CodebaseIndexer:
             ignore_patterns: Set of patterns to ignore (uses defaults if None).
             use_rassdb_config: Whether to use .rassdb-ignore and .rassdb-include.toml files.
         """
-        self.vector_store = VectorStore(db_path, embedding_dim)
+        self.db_path = db_path
         self.parser = CodeParser()
         self.model_name = model_name
         self.model: Optional[SentenceTransformer] = None
+        self.embedding_strategy: Optional[EmbeddingStrategy] = None
         self.code_extensions = code_extensions or self.DEFAULT_CODE_EXTENSIONS
         self.ignore_patterns = ignore_patterns or self.DEFAULT_IGNORE_PATTERNS
         self.use_rassdb_config = use_rassdb_config
@@ -141,13 +143,33 @@ class CodebaseIndexer:
         self.exclude_extensions: Set[str] = set()
         self.include_patterns: List[str] = []
         self.exclude_patterns: List[str] = []
+        self._embedding_dim = embedding_dim
+        self.vector_store: Optional[VectorStore] = None
 
     def _init_embedding_model(self) -> None:
         """Initialize the embedding model lazily."""
         if self.model is None:
+            # Check for model override in configs (project first, then global)
+            # This will be set after _load_rassdb_config is called
             logger.info(f"Loading embedding model: {self.model_name}")
+            # Load from standard HuggingFace cache location
             self.model = SentenceTransformer(self.model_name, trust_remote_code=True)
             logger.info("✓ Embedding model loaded")
+            
+            # Initialize embedding strategy
+            try:
+                self.embedding_strategy = get_embedding_strategy(self.model_name)
+                logger.info(f"✓ Using {self.embedding_strategy.__class__.__name__} strategy")
+            except ValueError as e:
+                logger.error(str(e))
+                raise
+                
+            # Initialize vector store with correct embedding dimension
+            if self.vector_store is None:
+                # Always use the model's actual dimension
+                embedding_dim = self.model.get_sentence_embedding_dimension()
+                logger.info(f"Initializing vector store with dimension: {embedding_dim}")
+                self.vector_store = VectorStore(self.db_path, embedding_dim)
 
     def _load_rassdb_config(self, base_path: Path) -> None:
         """Load .rassdb-config.toml configuration file.
@@ -155,44 +177,69 @@ class CodebaseIndexer:
         Args:
             base_path: The base directory path to look for config files.
         """
-        # Load .rassdb-config.toml
+        # First, try to load global config
+        global_config = None
+        global_config_path = Path.home() / ".rassdb-config.toml"
+        if global_config_path.exists():
+            try:
+                with open(global_config_path, "rb") as f:
+                    global_config = tomllib.load(f)
+                logger.info("✓ Found global ~/.rassdb-config.toml")
+            except Exception:
+                pass
+
+        # Then, load project config (overrides global)
         rassdb_config_path = base_path / ".rassdb-config.toml"
         if rassdb_config_path.exists():
             try:
                 with open(rassdb_config_path, "rb") as f:
                     self.config = tomllib.load(f)
-                logger.info("✓ Using .rassdb-config.toml file")
-
-                # Build sets for efficient lookup
-                self.include_extensions = set()
-                if "include-extensions" in self.config:
-                    for lang_exts in self.config["include-extensions"].values():
-                        self.include_extensions.update(lang_exts)
-
-                self.exclude_extensions = set()
-                if "exclude-extensions" in self.config:
-                    for category_exts in self.config["exclude-extensions"].values():
-                        self.exclude_extensions.update(category_exts)
-
-                self.include_patterns = []
-                if (
-                    "include-paths" in self.config
-                    and "patterns" in self.config["include-paths"]
-                ):
-                    self.include_patterns = self.config["include-paths"]["patterns"]
-
-                self.exclude_patterns = []
-                if (
-                    "exclude-paths" in self.config
-                    and "patterns" in self.config["exclude-paths"]
-                ):
-                    self.exclude_patterns = self.config["exclude-paths"]["patterns"]
-
+                logger.info("✓ Using project .rassdb-config.toml file")
             except Exception as e:
-                logger.warning(f"Failed to load .rassdb-config.toml: {e}")
+                logger.warning(f"Failed to load project .rassdb-config.toml: {e}")
+                self.config = global_config
+        else:
+            # Use global config if no project config
+            self.config = global_config
+            if global_config:
+                logger.info("✓ Using global config")
+
+        # Check for embedding model override
+        if (
+            self.config
+            and "embedding-model" in self.config
+            and "name" in self.config["embedding-model"]
+        ):
+            self.model_name = self.config["embedding-model"]["name"]
+            logger.info(f"Using embedding model from config: {self.model_name}")
+
+        # Build sets for efficient lookup
+        if self.config:
+            self.include_extensions = set()
+            if "include-extensions" in self.config:
+                for lang_exts in self.config["include-extensions"].values():
+                    self.include_extensions.update(lang_exts)
+
+            self.exclude_extensions = set()
+            if "exclude-extensions" in self.config:
+                for category_exts in self.config["exclude-extensions"].values():
+                    self.exclude_extensions.update(category_exts)
+
+            self.include_patterns = []
+            if (
+                "include-paths" in self.config
+                and "patterns" in self.config["include-paths"]
+            ):
+                self.include_patterns = self.config["include-paths"]["patterns"]
+
+            self.exclude_patterns = []
+            if (
+                "exclude-paths" in self.config
+                and "patterns" in self.config["exclude-paths"]
+            ):
+                self.exclude_patterns = self.config["exclude-paths"]["patterns"]
         else:
             # No config file, use defaults
-            self.config = None
             self.include_extensions = self.code_extensions
             self.exclude_extensions = set()
             self.include_patterns = []
@@ -296,12 +343,7 @@ class CodebaseIndexer:
     def create_embedding_text(
         self, chunk: CodeChunk, language: Optional[str], file_path: str
     ) -> str:
-        """Create text for embedding that focuses on code content and semantics.
-
-        Since we're using Nomic Embed Code model, we send just the raw code
-        as it's specifically trained to understand code structure and semantics.
-        Per best practices, we avoid adding any metadata like language identifiers,
-        chunk type labels, or parent class information.
+        """Create text for embedding using the appropriate strategy.
 
         Args:
             chunk: The code chunk.
@@ -309,10 +351,50 @@ class CodebaseIndexer:
             file_path: Relative file path.
 
         Returns:
-            Text to be embedded (just the raw code).
+            Text to be embedded with context.
         """
-        # Return only the raw code - no metadata, no language identifiers
-        return chunk.content
+        if hasattr(self, 'embedding_strategy') and self.embedding_strategy:
+            # Use the embedding strategy
+            metadata = {
+                "file_path": file_path,
+                "language": language,
+                "file_name": chunk.metadata.get("file_name", ""),
+            }
+            
+            # Add any docstring if available
+            if "docstring" in chunk.metadata:
+                metadata["docstring"] = chunk.metadata["docstring"]
+                
+            return self.embedding_strategy.prepare_code(chunk, metadata)
+        else:
+            # Fallback to old behavior if strategy not initialized
+            # Build context parts
+            context_parts = []
+
+            # Add the actual code first
+            context_parts.append(chunk.content)
+
+            # Then append context as comments
+            context_comments = []
+
+            # Add parent class context if available
+            if chunk.metadata.get("parent_class"):
+                context_comments.append(f"# Parent Class: {chunk.metadata['parent_class']}")
+
+            # Add function/method name if available
+            if chunk.name:
+                if chunk.chunk_type == "method":
+                    context_comments.append(f"# Method: {chunk.name}")
+                elif chunk.chunk_type == "function":
+                    context_comments.append(f"# Function: {chunk.name}")
+                elif chunk.chunk_type == "class":
+                    context_comments.append(f"# Class: {chunk.name}")
+
+            # Append context comments if any
+            if context_comments:
+                context_parts.append("\n" + "\n".join(context_comments))
+
+            return "\n".join(context_parts)
 
     def index_file(
         self, file_path: Path, base_path: Path, max_chunk_size: int = 1500
@@ -328,6 +410,9 @@ class CodebaseIndexer:
             Number of chunks indexed.
         """
         try:
+            # Ensure embedding model and vector store are initialized
+            self._init_embedding_model()
+            
             # Get file stats for change detection
             file_stats = file_path.stat()
             mtime = file_stats.st_mtime
@@ -356,6 +441,12 @@ class CodebaseIndexer:
 
             if not chunks:
                 # If no chunks found, index the whole file as one chunk
+                # Use strategy's ideal chunk size if available
+                if hasattr(self, 'embedding_strategy') and self.embedding_strategy and max_chunk_size is None:
+                    max_chunk_size = self.embedding_strategy.ideal_chunk_size["max_chars"]
+                elif max_chunk_size is None:
+                    max_chunk_size = 3000
+                    
                 chunks = [
                     CodeChunk(
                         content=content[:max_chunk_size],
@@ -434,6 +525,16 @@ class CodebaseIndexer:
 
         logger.info(f"Indexing directory: {base_path}")
 
+        # Store base path for model loading
+        self._base_path = base_path
+
+        # Load RASSDB configuration files if enabled
+        if self.use_rassdb_config:
+            self._load_rassdb_config(base_path)
+            
+        # Initialize model and vector store early to get correct dimensions
+        self._init_embedding_model()
+
         if clear_existing:
             # Clear all existing data
             self.vector_store.conn.execute("DELETE FROM code_chunks")
@@ -441,10 +542,6 @@ class CodebaseIndexer:
             self.vector_store.conn.execute("DELETE FROM file_metadata")
             self.vector_store.conn.commit()
             logger.info("✓ Cleared existing database")
-
-        # Load RASSDB configuration files if enabled
-        if self.use_rassdb_config:
-            self._load_rassdb_config(base_path)
 
         # Load gitignore if available
         gitignore_func = None
@@ -484,6 +581,7 @@ class CodebaseIndexer:
         # Print statistics
         stats = self.vector_store.get_statistics()
         logger.info("\nDatabase Statistics:")
+        logger.info(f"  Model used: {self.model_name}")
         logger.info(f"  Total chunks: {stats['total_chunks']}")
         logger.info(f"  Unique files: {stats['unique_files']}")
         logger.info("  By language:")

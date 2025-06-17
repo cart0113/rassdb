@@ -41,6 +41,14 @@
                         </div>
                     </div>
                     
+                    <div class="mb-3">
+                        <label for="ragLimitSlider" class="form-label">RAG Results Limit</label>
+                        <input type="range" class="form-range" id="ragLimitSlider" min="1" max="20" value="10">
+                        <div class="text-center small text-muted">
+                            <span id="ragLimitValue">10</span> results
+                        </div>
+                    </div>
+                    
                     <div class="d-grid gap-2">
                         <button class="btn btn-secondary" id="clearHistoryBtn">Clear History</button>
                         <button class="btn btn-secondary" id="clearChatBtn">Clear Chat</button>
@@ -66,7 +74,26 @@
             <!-- Main chat area -->
             <div class="col-md-9 main-content">
                 <div class="chat-container">
-                    <div id="chatMessages" class="messages-container"></div>
+                    <!-- Split pane for RAG and LLM outputs -->
+                    <div class="messages-area">
+                        <div class="split-pane">
+                            <!-- RAG Panel -->
+                            <div class="rag-panel">
+                                <div class="panel-header">
+                                    <h5>RAG Context</h5>
+                                </div>
+                                <div id="ragResults" class="panel-content"></div>
+                            </div>
+                            
+                            <!-- LLM Panel -->
+                            <div class="llm-panel">
+                                <div class="panel-header">
+                                    <h5>LLM Response</h5>
+                                </div>
+                                <div id="chatMessages" class="panel-content"></div>
+                            </div>
+                        </div>
+                    </div>
                     
                     <div class="input-container">
                         <div class="prompt-container">

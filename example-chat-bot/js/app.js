@@ -69,6 +69,18 @@ function initializeUI() {
     
     // Initialize clipboard
     new ClipboardJS('.copy-btn');
+    
+    // RAG limit slider
+    const ragLimitSlider = document.getElementById('ragLimitSlider');
+    const ragLimitValue = document.getElementById('ragLimitValue');
+    const savedLimit = localStorage.getItem('ragLimit') || '10';
+    ragLimitSlider.value = savedLimit;
+    ragLimitValue.textContent = savedLimit;
+    
+    ragLimitSlider.addEventListener('input', (e) => {
+        ragLimitValue.textContent = e.target.value;
+        localStorage.setItem('ragLimit', e.target.value);
+    });
 }
 
 // Dark mode
@@ -205,17 +217,28 @@ async function submitPrompt() {
     promptInput.value = '';
     currentHistoryIndex = -1;
     
+    // Clear previous RAG results
+    document.getElementById('ragResults').innerHTML = '';
+    
     // Show thinking indicator
     const thinkingDiv = addThinkingIndicator();
     
+    // Show RAG thinking indicator if enabled
+    const useRAG = document.getElementById('ragToggle').checked;
+    let ragThinking = null;
+    if (useRAG) {
+        ragThinking = addRagThinkingIndicator();
+    }
+    
     try {
         const model = document.getElementById('modelSelect').value;
-        const useRAG = document.getElementById('ragToggle').checked;
         
+        // Generate LLM response
+        const ragLimit = parseInt(document.getElementById('ragLimitSlider').value);
         const response = await fetch(`${API_BASE}/api/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt, model, useRAG })
+            body: JSON.stringify({ prompt, model, useRAG, ragLimit })
         });
         
         if (!response.ok) throw new Error('Generation failed');
@@ -232,26 +255,36 @@ async function submitPrompt() {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let responseText = '';
+        let buffer = '';
         
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
             
-            const chunk = decoder.decode(value);
-            const lines = chunk.split('\n');
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
             
             for (const line of lines) {
                 if (line.startsWith('data: ')) {
                     try {
                         const data = JSON.parse(line.slice(6));
-                        if (data.error) {
+                        if (data.type === 'rag') {
+                            // Handle RAG results
+                            if (ragThinking) {
+                                ragThinking.remove();
+                                ragThinking = null;
+                            }
+                            displayRagQuery(data.query);
+                            displayRagResults(data.results, data.formattedContext);
+                        } else if (data.error) {
                             // Handle error in stream
                             messageDiv.innerHTML = `<span class="text-danger">Error: ${data.error}</span>`;
                             break;
                         } else if (data.response) {
                             responseText += data.response;
-                            messageDiv.innerHTML = processMarkdown(responseText);
-                            scrollToBottom();
+                            // Update content without rebuilding entire DOM
+                            updateMessageContent(messageDiv, responseText);
                         }
                     } catch (e) {
                         // Ignore parse errors
@@ -260,8 +293,21 @@ async function submitPrompt() {
             }
         }
         
-        // Apply syntax highlighting to any code blocks
-        messageDiv.querySelectorAll('pre code').forEach(block => {
+        // Process remaining buffer
+        if (buffer && buffer.startsWith('data: ')) {
+            try {
+                const data = JSON.parse(buffer.slice(6));
+                if (data.response) {
+                    responseText += data.response;
+                    updateMessageContent(messageDiv, responseText);
+                }
+            } catch (e) {
+                // Ignore parse errors
+            }
+        }
+        
+        // Final syntax highlighting
+        messageDiv.querySelectorAll('pre code:not(.hljs)').forEach(block => {
             hljs.highlightElement(block);
         });
         
@@ -337,69 +383,9 @@ function processMarkdown(text) {
 
 // Process code blocks for VS Code styling
 function processCodeBlocks(container) {
-    const codeBlocks = container.querySelectorAll('pre code');
-    
-    codeBlocks.forEach((block, index) => {
-        const pre = block.parentElement;
-        
-        // Skip if already processed
-        if (pre.parentElement && pre.parentElement.classList.contains('code-container')) {
-            return;
-        }
-        
-        const language = block.className.match(/language-(\w+)/)?.[1] || 'plaintext';
-        
-        // Create wrapper
-        const wrapper = document.createElement('div');
-        wrapper.className = 'code-block-wrapper';
-        
-        // Create controls bar
-        const controls = document.createElement('div');
-        controls.className = 'code-controls';
-        controls.innerHTML = `
-            <span class="code-language">${language}</span>
-            <button class="copy-btn" data-clipboard-target="#code-${Date.now()}-${index}">
-                Copy
-            </button>
-        `;
-        
-        // Add ID to code block for clipboard
-        block.id = `code-${Date.now()}-${index}`;
-        
-        // Add line numbers
-        const lines = block.textContent.split('\n');
-        const lineNumbers = document.createElement('div');
-        lineNumbers.className = 'line-numbers';
-        
-        lines.forEach((_, i) => {
-            const lineNum = document.createElement('div');
-            lineNum.textContent = i + 1;
-            lineNumbers.appendChild(lineNum);
-        });
-        
-        // Create code container
-        const codeContainer = document.createElement('div');
-        codeContainer.className = 'code-container';
-        
-        // Insert wrapper before pre
-        pre.parentElement.insertBefore(wrapper, pre);
-        
-        // Build the structure
-        wrapper.appendChild(controls);
-        wrapper.appendChild(codeContainer);
-        codeContainer.appendChild(lineNumbers);
-        codeContainer.appendChild(pre);
-    });
-    
-    // Reinitialize clipboard for new buttons
-    new ClipboardJS('.copy-btn').on('success', function(e) {
-        const btn = e.trigger;
-        const originalText = btn.textContent;
-        btn.textContent = 'Copied!';
-        setTimeout(() => {
-            btn.textContent = originalText;
-        }, 2000);
-    });
+    // Don't process code blocks - let the default markdown rendering handle it
+    // This was causing the line numbers to appear before the code
+    return;
 }
 
 // Clear history
@@ -420,10 +406,149 @@ function clearChat() {
     document.getElementById('chatMessages').innerHTML = '';
 }
 
+// Display RAG query
+function displayRagQuery(query) {
+    const ragContainer = document.getElementById('ragResults');
+    const queryDiv = document.createElement('div');
+    queryDiv.className = 'rag-query';
+    queryDiv.innerHTML = `
+        <div class="rag-query-header">RAG Query:</div>
+        <div class="rag-query-text">${escapeHtml(query)}</div>
+    `;
+    ragContainer.appendChild(queryDiv);
+}
+
+// Display RAG results
+function displayRagResults(results, formattedContext) {
+    const ragContainer = document.getElementById('ragResults');
+    
+    
+    if (!results || results.length === 0) {
+        const noResults = document.createElement('div');
+        noResults.className = 'text-muted';
+        noResults.textContent = 'No relevant code found.';
+        ragContainer.appendChild(noResults);
+        return;
+    }
+    
+    const resultsHeader = document.createElement('div');
+    resultsHeader.className = 'rag-results-header';
+    resultsHeader.textContent = `Found ${results.length} relevant code chunks:`;
+    ragContainer.appendChild(resultsHeader);
+    
+    results.forEach((result, index) => {
+        const resultDiv = document.createElement('div');
+        resultDiv.className = 'rag-result';
+        
+        // Build header with available fields
+        let headerText = '';
+        if (result.file_path) {
+            headerText = result.file_path;
+            if (result.start_line !== undefined) {
+                headerText += `:${result.start_line}`;
+                if (result.end_line !== undefined) {
+                    headerText += `-${result.end_line}`;
+                }
+            }
+        } else {
+            headerText = `Result ${index + 1}`;
+        }
+        
+        const header = document.createElement('div');
+        header.className = 'rag-result-header';
+        // Use similarity field from RASSDB results
+        const score = result.similarity || result.score;
+        const scoreText = score !== undefined && score !== null ? score.toFixed(3) : '—';
+        header.innerHTML = `
+            <span>${headerText}</span>
+            <span class="rag-result-score">Score: ${scoreText}</span>
+        `;
+        
+        // Display metadata if available
+        if (result.chunk_type || result.language) {
+            const metadata = document.createElement('div');
+            metadata.className = 'rag-result-metadata';
+            metadata.style.fontSize = '0.85rem';
+            metadata.style.opacity = '0.8';
+            metadata.style.marginBottom = '0.5rem';
+            metadata.textContent = `Type: ${result.chunk_type || 'unknown'}, Language: ${result.language || 'unknown'}`;
+            resultDiv.appendChild(metadata);
+        }
+        
+        const content = document.createElement('pre');
+        const codeText = result.content || result.text || JSON.stringify(result, null, 2);
+        content.innerHTML = `<code class="language-${result.language || 'plaintext'}">${escapeHtml(codeText)}</code>`;
+        
+        resultDiv.appendChild(header);
+        resultDiv.appendChild(content);
+        ragContainer.appendChild(resultDiv);
+        
+        // Apply syntax highlighting
+        hljs.highlightElement(content.querySelector('code'));
+    });
+    
+    // Add formatted context section showing exactly what LLM receives
+    if (formattedContext) {
+        const contextDiv = document.createElement('div');
+        contextDiv.className = 'rag-formatted-context';
+        contextDiv.innerHTML = `
+            <div class="rag-context-header">Exact context sent to LLM:</div>
+            <pre class="rag-context-pre"><code>${escapeHtml(formattedContext)}</code></pre>
+        `;
+        ragContainer.appendChild(contextDiv);
+    }
+}
+
+// Add RAG thinking indicator
+function addRagThinkingIndicator() {
+    const ragContainer = document.getElementById('ragResults');
+    const thinkingDiv = document.createElement('div');
+    thinkingDiv.className = 'rag-thinking';
+    thinkingDiv.innerHTML = `
+        <div class="spinner-border spinner-border-sm text-primary me-2" role="status">
+            <span class="visually-hidden">Searching...</span>
+        </div>
+        Searching codebase...
+    `;
+    ragContainer.appendChild(thinkingDiv);
+    return thinkingDiv;
+}
+
+// Escape HTML
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 // Scroll to bottom
 function scrollToBottom() {
     const messages = document.getElementById('chatMessages');
-    messages.scrollTop = messages.scrollHeight;
+    if (messages && messages.parentElement) {
+        messages.parentElement.scrollTop = messages.parentElement.scrollHeight;
+    }
+}
+
+// Update message content without rebuilding DOM
+function updateMessageContent(messageDiv, content) {
+    // Store scroll position
+    const scrollPos = messageDiv.parentElement.scrollTop;
+    const wasAtBottom = Math.abs(messageDiv.parentElement.scrollHeight - messageDiv.parentElement.scrollTop - messageDiv.parentElement.clientHeight) < 50;
+    
+    // Update content directly
+    messageDiv.innerHTML = processMarkdown(content);
+    
+    // Apply syntax highlighting to new code blocks
+    messageDiv.querySelectorAll('pre code:not(.hljs)').forEach(block => {
+        hljs.highlightElement(block);
+    });
+    
+    // Restore scroll position or scroll to bottom
+    if (wasAtBottom) {
+        scrollToBottom();
+    } else {
+        messageDiv.parentElement.scrollTop = scrollPos;
+    }
 }
 
 // Periodic status check

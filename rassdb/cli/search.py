@@ -6,7 +6,10 @@ semantic (embedding-based) and literal (grep-like) search methods.
 
 import sys
 import json
+import logging
 import re
+import tomllib
+from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 import click
 from tabulate import tabulate
@@ -15,14 +18,15 @@ import numpy as np
 
 from rassdb.vector_store import VectorStore
 from rassdb.utils.db_discovery import discover_database
+from rassdb.embedding_strategies import get_embedding_strategy
+
+logger = logging.getLogger(__name__)
 
 
 class SearchEngine:
     """Handles both semantic and literal search operations."""
 
-    def __init__(
-        self, db_path: str, model_name: str = "nomic-ai/nomic-embed-text-v1.5"
-    ):
+    def __init__(self, db_path: str, model_name: str = "nomic-ai/CodeRankEmbed"):
         """Initialize search engine.
 
         Args:
@@ -32,11 +36,45 @@ class SearchEngine:
         self.db_path = db_path
         self.model_name = model_name
         self._model: Optional[SentenceTransformer] = None
+        self._load_global_config()
+
+    def _load_global_config(self):
+        """Load configuration from project and global .rassdb-config.toml files."""
+        # First check project config
+        db_dir = Path(self.db_path).parent.parent
+        project_config_path = db_dir / ".rassdb-config.toml"
+
+        config = None
+        if project_config_path.exists():
+            try:
+                with open(project_config_path, "rb") as f:
+                    config = tomllib.load(f)
+            except Exception:
+                pass
+
+        # Fall back to global config if no project config
+        if config is None:
+            global_config_path = Path.home() / ".rassdb-config.toml"
+            if global_config_path.exists():
+                try:
+                    with open(global_config_path, "rb") as f:
+                        config = tomllib.load(f)
+                except Exception:
+                    pass
+
+        # Use embedding model from config if available
+        if (
+            config
+            and "embedding-model" in config
+            and "name" in config["embedding-model"]
+        ):
+            self.model_name = config["embedding-model"]["name"]
 
     @property
     def model(self) -> SentenceTransformer:
         """Lazy load the embedding model."""
         if self._model is None:
+            # Load from standard HuggingFace cache location
             self._model = SentenceTransformer(self.model_name, trust_remote_code=True)
         return self._model
 
@@ -60,12 +98,13 @@ class SearchEngine:
         """
         vector_store = VectorStore(self.db_path)
 
-        # Create query text that matches how we create chunk embeddings
-        query_parts = []
-        if language:
-            query_parts.append(f"Language: {language}")
-        query_parts.extend(["Code:", query])
-        query_text = "\n".join(query_parts)
+        # Use embedding strategy to prepare query
+        try:
+            strategy = get_embedding_strategy(self.model_name)
+            query_text = strategy.prepare_query(query)
+        except ValueError:
+            # Fallback if model not supported
+            query_text = query
 
         # Generate query embedding
         query_embedding = self.model.encode(query_text, normalize_embeddings=True)
@@ -83,7 +122,9 @@ class SearchEngine:
         # Add search type marker and calculate similarity
         for r in results:
             r["search_type"] = "semantic"
-            r["similarity"] = 1.0 / (1.0 + r.get("distance", 0))
+            # For cosine distance, similarity = 1 - distance
+            # Cosine distance ranges from 0 to 2, where 0 means identical
+            r["similarity"] = 1.0 - r.get("distance", 0)
 
         return results
 

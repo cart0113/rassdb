@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 )
 @click.option("--clear", is_flag=True, help="Clear existing database before indexing")
 @click.option(
-    "--model", default="nomic-ai/nomic-embed-text-v1.5", help="Embedding model name"
+    "--model", default="nomic-ai/CodeRankEmbed", help="Embedding model name"
 )
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress output")
 def main(

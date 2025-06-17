@@ -71,9 +71,9 @@ docs/_build/
 docs/source/_autosummary/
 
 # RASSDB specific
-.rassdb/*.rassdb
-.rassdb/cache/
-.rassdb/temp/
+.rassdb*
+.rassdb/
+.rassdb.*
 
 # OS files
 Thumbs.db
@@ -100,7 +100,5 @@ htmlcov/
 sessions/
 *.session
 
-# Jupyter
 .ipynb_checkpoints/
 *.ipynb
-.rassdb

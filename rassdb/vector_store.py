@@ -240,7 +240,7 @@ class VectorStore:
                 c.end_line,
                 c.chunk_type,
                 c.metadata,
-                vec_distance_l2(v.embedding, ?) as distance
+                vec_distance_cosine(v.embedding, ?) as distance
             FROM vec_embeddings v
             JOIN code_chunks c ON v.rowid = c.id
             {where_clause}
