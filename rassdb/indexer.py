@@ -19,6 +19,7 @@ from rassdb.vector_store import VectorStore
 from rassdb.code_parser import CodeParser, CodeChunk
 from rassdb.embedding_strategies import get_embedding_strategy, EmbeddingStrategy
 from rassdb.cloud_embeddings import get_cloud_embedding_model
+from rassdb.gguf_embeddings import get_gguf_embedding_model
 
 logger = logging.getLogger(__name__)
 
@@ -160,9 +161,15 @@ class CodebaseIndexer:
                 self.model = cloud_model
                 logger.info("✓ Cloud embedding model loaded")
             else:
-                # Load from standard HuggingFace cache location
-                self.model = SentenceTransformer(self.model_name, trust_remote_code=True)
-                logger.info("✓ Local embedding model loaded")
+                # Check if it's a GGUF model
+                gguf_model = get_gguf_embedding_model(self.model_name)
+                if gguf_model:
+                    self.model = gguf_model
+                    logger.info("✓ GGUF embedding model loaded")
+                else:
+                    # Load from standard HuggingFace cache location
+                    self.model = SentenceTransformer(self.model_name, trust_remote_code=True)
+                    logger.info("✓ Local embedding model loaded")
             
             # Initialize embedding strategy
             try:

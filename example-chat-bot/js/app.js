@@ -9,7 +9,7 @@ let isGenerating = false;
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     initializeUI();
-    checkModelStatus();
+    checkAPIStatus();
     loadPromptHistory();
     loadDBStats();
     
@@ -81,6 +81,21 @@ function initializeUI() {
         ragLimitValue.textContent = e.target.value;
         localStorage.setItem('ragLimit', e.target.value);
     });
+    
+    // Model provider radio buttons
+    const providerRadios = document.querySelectorAll('input[name="modelProvider"]');
+    const savedProvider = localStorage.getItem('modelProvider') || 'ollama';
+    document.querySelector(`input[name="modelProvider"][value="${savedProvider}"]`).checked = true;
+    
+    providerRadios.forEach(radio => {
+        radio.addEventListener('change', (e) => {
+            localStorage.setItem('modelProvider', e.target.value);
+            updateModelDropdown(e.target.value);
+        });
+    });
+    
+    // Initialize model dropdown based on saved provider
+    updateModelDropdown(savedProvider);
 }
 
 // Dark mode
@@ -90,27 +105,39 @@ function updateDarkMode(isDark) {
     document.querySelector('.light-mode-label').style.display = isDark ? 'none' : 'inline';
 }
 
-// Check model status
-async function checkModelStatus() {
+// Check API status
+async function checkAPIStatus() {
     try {
-        const response = await fetch(`${API_BASE}/api/models`);
+        const response = await fetch(`${API_BASE}/api/status`);
         const data = await response.json();
         
         const modelStatus = document.getElementById('modelStatus');
-        if (data.models && data.models.length > 0) {
-            // Find Qwen model
-            const qwenModel = data.models.find(m => m.name.includes('qwen2.5-coder'));
-            if (qwenModel) {
-                modelStatus.innerHTML = '<span class="text-success">✓ Model connected</span>';
-            } else {
-                modelStatus.innerHTML = '<span class="text-warning">⚠ Qwen2.5-Coder not found</span>';
-            }
-            
-            // Update model dropdown
-            updateModelDropdown(data.models);
+        let statusHTML = '';
+        
+        if (data.ollama && data.ollama.available) {
+            statusHTML += '<div class="text-success">✓ Ollama connected</div>';
         } else {
-            modelStatus.innerHTML = '<span class="text-danger">✗ No connection to Ollama</span>';
+            statusHTML += '<div class="text-danger">✗ Ollama not available</div>';
         }
+        
+        if (data.anthropic && data.anthropic.available) {
+            statusHTML += '<div class="text-success">✓ Anthropic API ready</div>';
+        } else {
+            statusHTML += '<div class="text-warning">⚠ Anthropic API not configured</div>';
+        }
+        
+        modelStatus.innerHTML = statusHTML;
+        
+        // Store available models
+        window.availableModels = {
+            ollama: data.ollama.models || [],
+            anthropic: data.anthropic.models || []
+        };
+        
+        // Update dropdown based on current provider
+        const currentProvider = document.querySelector('input[name="modelProvider"]:checked').value;
+        updateModelDropdown(currentProvider);
+        
     } catch (error) {
         document.getElementById('modelStatus').innerHTML = 
             '<span class="text-danger">✗ No connection to server</span>';
@@ -118,22 +145,71 @@ async function checkModelStatus() {
 }
 
 // Update model dropdown
-function updateModelDropdown(models) {
+function updateModelDropdown(provider) {
     const select = document.getElementById('modelSelect');
     const currentValue = select.value;
     
     select.innerHTML = '';
-    models.forEach(model => {
-        const option = document.createElement('option');
-        option.value = model.name;
-        option.textContent = model.name;
-        select.appendChild(option);
-    });
     
-    // Restore selection if possible
-    if (models.find(m => m.name === currentValue)) {
-        select.value = currentValue;
+    if (provider === 'anthropic') {
+        // Anthropic models
+        const anthropicModels = [
+            { value: 'claude-3-5-sonnet-20241022', text: 'Claude 3.5 Sonnet' },
+            { value: 'claude-3-5-haiku-20241022', text: 'Claude 3.5 Haiku' }
+        ];
+        
+        anthropicModels.forEach(model => {
+            const option = document.createElement('option');
+            option.value = model.value;
+            option.textContent = model.text;
+            select.appendChild(option);
+        });
+        
+        // Try to restore previous Anthropic selection
+        const savedAnthropicModel = localStorage.getItem('selectedAnthropicModel');
+        if (savedAnthropicModel && anthropicModels.find(m => m.value === savedAnthropicModel)) {
+            select.value = savedAnthropicModel;
+        }
+        
+    } else {
+        // Ollama models
+        const models = window.availableModels?.ollama || [];
+        if (models.length === 0) {
+            // Default Ollama models if not connected
+            const defaultModels = [
+                'qwen2.5-coder:7b-instruct',
+                'qwen2.5-coder:3b-instruct'
+            ];
+            defaultModels.forEach(model => {
+                const option = document.createElement('option');
+                option.value = model;
+                option.textContent = model;
+                select.appendChild(option);
+            });
+        } else {
+            models.forEach(model => {
+                const option = document.createElement('option');
+                option.value = model.name;
+                option.textContent = model.name;
+                select.appendChild(option);
+            });
+        }
+        
+        // Try to restore previous Ollama selection
+        const savedOllamaModel = localStorage.getItem('selectedOllamaModel');
+        if (savedOllamaModel && (models.find(m => m.name === savedOllamaModel) || select.querySelector(`option[value="${savedOllamaModel}"]`))) {
+            select.value = savedOllamaModel;
+        }
     }
+    
+    // Save model selection per provider
+    select.addEventListener('change', (e) => {
+        if (provider === 'anthropic') {
+            localStorage.setItem('selectedAnthropicModel', e.target.value);
+        } else {
+            localStorage.setItem('selectedOllamaModel', e.target.value);
+        }
+    });
 }
 
 // Load database statistics
@@ -234,13 +310,14 @@ async function submitPrompt() {
     
     try {
         const model = document.getElementById('modelSelect').value;
+        const modelType = document.querySelector('input[name="modelProvider"]:checked').value;
         
         // Generate LLM response
         const ragLimit = parseInt(document.getElementById('ragLimitSlider').value);
         const response = await fetch(`${API_BASE}/api/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt, model, useRAG, ragLimit })
+            body: JSON.stringify({ prompt, model, modelType, useRAG, ragLimit })
         });
         
         if (!response.ok) throw new Error('Generation failed');
@@ -566,4 +643,4 @@ function updateMessageContent(messageDiv, content) {
 }
 
 // Periodic status check
-setInterval(checkModelStatus, 30000);
+setInterval(checkAPIStatus, 30000);

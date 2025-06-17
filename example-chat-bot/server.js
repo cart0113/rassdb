@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs').promises;
 const { spawn } = require('child_process');
+const { Anthropic } = require('@anthropic-ai/sdk');
 
 // RASSDB command paths
 const RASSDB_BIN = path.join(__dirname, '..', 'bin');
@@ -11,6 +12,15 @@ const RASSDB_STATS = path.join(RASSDB_BIN, 'rassdb-stats');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Initialize Anthropic client if API key is available
+const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+let anthropicClient = null;
+if (anthropicApiKey) {
+    anthropicClient = new Anthropic({
+        apiKey: anthropicApiKey
+    });
+}
 
 // Middleware
 app.use(cors());
@@ -199,7 +209,7 @@ app.get('/api/models', async (req, res) => {
 
 // Generate response with RAG context
 app.post('/api/generate', async (req, res) => {
-    const { prompt, model = 'qwen2.5-coder:7b-instruct', useRAG = true } = req.body;
+    const { prompt, model = 'qwen2.5-coder:7b-instruct', useRAG = true, modelType = 'ollama' } = req.body;
     
     // Add to prompt history
     promptHistory.push(prompt);
@@ -287,68 +297,112 @@ app.post('/api/generate', async (req, res) => {
     messages.push({ role: 'user', content: contextualPrompt });
     
     try {
-        const response = await fetch('http://localhost:11434/api/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: model,
-                messages: messages,
-                stream: true
-            })
-        });
-        
-        if (!response.ok) {
-            throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
-        }
-        
         let fullResponse = '';
         
-        // Handle streaming response from fetch
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        
-        try {
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
+        if (modelType === 'anthropic' && anthropicClient) {
+            // Use Anthropic API
+            try {
+                const stream = await anthropicClient.messages.create({
+                    model: model || 'claude-3-5-sonnet-20241022',
+                    messages: messages.map(msg => ({
+                        role: msg.role === 'assistant' ? 'assistant' : 'user',
+                        content: msg.content
+                    })),
+                    max_tokens: 4096,
+                    stream: true
+                });
                 
-                const chunk = decoder.decode(value);
-                const lines = chunk.toString().split('\n').filter(line => line.trim());
-                
-                for (const line of lines) {
-                    try {
-                        const json = JSON.parse(line);
-                        if (json.message && json.message.content) {
-                            fullResponse += json.message.content;
-                            res.write(`data: ${JSON.stringify({
-                                response: json.message.content,
-                                done: json.done
-                            })}\n\n`);
-                        }
-                        
-                        if (json.done) {
-                            // Save to history
-                            conversationHistory.push({
-                                prompt: prompt,
-                                response: fullResponse,
-                                ragContext: ragContext,
-                                timestamp: new Date().toISOString()
-                            });
-                            saveHistory();
-                        }
-                    } catch (e) {
-                        // Ignore parse errors
+                for await (const chunk of stream) {
+                    if (chunk.type === 'content_block_delta' && chunk.delta.text) {
+                        fullResponse += chunk.delta.text;
+                        res.write(`data: ${JSON.stringify({
+                            response: chunk.delta.text,
+                            done: false
+                        })}\n\n`);
                     }
                 }
+                
+                // Save to history
+                conversationHistory.push({
+                    prompt: prompt,
+                    response: fullResponse,
+                    ragContext: ragContext,
+                    timestamp: new Date().toISOString()
+                });
+                saveHistory();
+                
+                res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+                res.end();
+                
+            } catch (error) {
+                console.error('Anthropic API error:', error);
+                res.write(`data: ${JSON.stringify({ error: `Anthropic API error: ${error.message}` })}\n\n`);
+                res.end();
             }
             
-            res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-            res.end();
+        } else {
+            // Use Ollama API (default)
+            const response = await fetch('http://localhost:11434/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: model,
+                    messages: messages,
+                    stream: true
+                })
+            });
             
-        } catch (error) {
-            console.error('Stream reading error:', error);
-            res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
-            res.end();
+            if (!response.ok) {
+                throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+            }
+            
+            // Handle streaming response from fetch
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            
+            try {
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.toString().split('\n').filter(line => line.trim());
+                    
+                    for (const line of lines) {
+                        try {
+                            const json = JSON.parse(line);
+                            if (json.message && json.message.content) {
+                                fullResponse += json.message.content;
+                                res.write(`data: ${JSON.stringify({
+                                    response: json.message.content,
+                                    done: json.done
+                                })}\n\n`);
+                            }
+                            
+                            if (json.done) {
+                                // Save to history
+                                conversationHistory.push({
+                                    prompt: prompt,
+                                    response: fullResponse,
+                                    ragContext: ragContext,
+                                    timestamp: new Date().toISOString()
+                                });
+                                saveHistory();
+                            }
+                        } catch (e) {
+                            // Ignore parse errors
+                        }
+                    }
+                }
+                
+                res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+                res.end();
+                
+            } catch (error) {
+                console.error('Stream reading error:', error);
+                res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+                res.end();
+            }
         }
         
     } catch (error) {
@@ -426,6 +480,40 @@ app.get('/api/models', async (req, res) => {
     }
 });
 
+// Check API status for both Ollama and Anthropic
+app.get('/api/status', async (req, res) => {
+    const status = {
+        ollama: { available: false },
+        anthropic: { available: false }
+    };
+    
+    // Check Ollama
+    try {
+        const response = await fetch('http://localhost:11434/api/tags');
+        if (response.ok) {
+            const data = await response.json();
+            status.ollama = {
+                available: true,
+                models: data.models || []
+            };
+        }
+    } catch (error) {
+        status.ollama.error = error.message;
+    }
+    
+    // Check Anthropic
+    if (anthropicClient) {
+        status.anthropic = {
+            available: true,
+            models: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022']
+        };
+    } else {
+        status.anthropic.error = 'API key not configured';
+    }
+    
+    res.json(status);
+});
+
 // Start server
 loadHistory().then(() => {
     app.listen(PORT, () => {
@@ -435,5 +523,11 @@ loadHistory().then(() => {
         console.log('  2. Qwen2.5-Coder model is installed (ollama pull qwen2.5-coder:7b-instruct)');
         console.log('  3. RASSDB is installed (pip install -e ..)');
         console.log('  4. A database exists at .rassdb/example-chat-bot-nomic-embed-text-v1.5.rassdb');
+        
+        if (anthropicClient) {
+            console.log('\n✓ Anthropic API key detected - Claude models available');
+        } else {
+            console.log('\n  For Anthropic Claude access: set ANTHROPIC_API_KEY environment variable');
+        }
     });
 });

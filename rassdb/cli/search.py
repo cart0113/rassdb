@@ -20,6 +20,7 @@ from rassdb.vector_store import VectorStore
 from rassdb.utils.db_discovery import discover_database
 from rassdb.embedding_strategies import get_embedding_strategy
 from rassdb.cloud_embeddings import get_cloud_embedding_model
+from rassdb.gguf_embeddings import get_gguf_embedding_model
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +81,13 @@ class SearchEngine:
             if cloud_model:
                 self._model = cloud_model
             else:
-                # Load from standard HuggingFace cache location
-                self._model = SentenceTransformer(self.model_name, trust_remote_code=True)
+                # Check if it's a GGUF model
+                gguf_model = get_gguf_embedding_model(self.model_name)
+                if gguf_model:
+                    self._model = gguf_model
+                else:
+                    # Load from standard HuggingFace cache location
+                    self._model = SentenceTransformer(self.model_name, trust_remote_code=True)
         return self._model
 
     def semantic_search(
