@@ -267,10 +267,58 @@ class NomicEmbedTextStrategy(EmbeddingStrategy):
         # Add context as a single comment line if we have any
         if context_parts:
             lines.append(f"# {' - '.join(context_parts)}")
-            lines.append("")  # Empty line after context
+
+        # Add docstring if available (limited to prevent dominating the embedding)
+        docstring = metadata.get("docstring", "")
+        if docstring:
+            # Limit docstring to first 300 characters
+            if len(docstring) > 300:
+                docstring = docstring[:297] + "..."
+            # Add as a comment block
+            lines.append("# " + docstring.replace("\n", "\n# "))
+
+        # Add empty line before code if we have any context
+        if lines:
+            lines.append("")
 
         # Add the actual code
         lines.append(chunk.content)
+
+        # Extract and include significant inline comments (first few)
+        code_lines = chunk.content.split("\n")
+        significant_comments = []
+        comment_prefixes = ["#", "//", "/*", "*", "--"]  # Common comment prefixes
+
+        for line in code_lines[:20]:  # Only check first 20 lines for performance
+            line = line.strip()
+            for prefix in comment_prefixes:
+                if line.startswith(prefix) and len(line) > len(prefix) + 5:
+                    # Extract comment text
+                    comment = line[len(prefix) :].strip()
+                    # Remove common comment endings like */
+                    comment = comment.rstrip("*/").strip()
+
+                    # Skip trivial or auto-generated comments
+                    if (
+                        comment
+                        and not comment.startswith("TODO")
+                        and not comment.startswith("FIXME")
+                        and not comment.startswith("NOTE")
+                        and not comment.startswith("=")
+                        and not comment.startswith("-")
+                    ):
+                        significant_comments.append(comment)
+                        if len(significant_comments) >= 3:  # Limit to 3 comments
+                            break
+            if len(significant_comments) >= 3:
+                break
+
+        # Add significant comments at the end if found
+        if significant_comments:
+            lines.append("")
+            lines.append("# Additional context from inline comments:")
+            for comment in significant_comments:
+                lines.append(f"# - {comment}")
 
         # Prefix with task instruction
         full_content = "\n".join(lines)
@@ -294,23 +342,22 @@ class NomicEmbedTextStrategy(EmbeddingStrategy):
         }
 
 
-
 class NomicCloudEmbedCodeStrategy(NomicEmbedCodeStrategy):
     """Strategy for Nomic Cloud API embedding generation.
-    
+
     This strategy uses the same text preparation as NomicEmbedCodeStrategy
     but generates embeddings via the Nomic Cloud API instead of locally.
-    
+
     Requires NOMIC_API_KEY environment variable to be set.
     """
-    
+
     def __init__(self):
         """Initialize cloud strategy and validate API key."""
         super().__init__()
         self.api_key = os.environ.get("NOMIC_API_KEY")
         if not self.api_key:
             raise ValueError("NOMIC_API_KEY environment variable not set")
-            
+
     def prepare_query(self, query: str) -> str:
         """Cloud API handles task types differently."""
         # For cloud API, we don't add the prefix - we'll use task_type parameter

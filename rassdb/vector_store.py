@@ -102,6 +102,13 @@ class VectorStore:
             );
             
             CREATE INDEX IF NOT EXISTS idx_file_metadata_path ON file_metadata(file_path);
+            
+            CREATE TABLE IF NOT EXISTS database_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
         # Check if we need to add the new part_start_line and part_end_line columns
@@ -613,6 +620,47 @@ class VectorStore:
         stats["unique_files"] = cursor.fetchone()[0]
 
         return stats
+
+    def set_metadata(self, key: str, value: str) -> None:
+        """Set a metadata value in the database.
+
+        Args:
+            key: The metadata key.
+            value: The metadata value.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO database_metadata (key, value, updated_at) 
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET 
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP
+        """, (key, value))
+        self.conn.commit()
+
+    def get_metadata(self, key: str) -> Optional[str]:
+        """Get a metadata value from the database.
+
+        Args:
+            key: The metadata key.
+
+        Returns:
+            The metadata value if found, None otherwise.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT value FROM database_metadata WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    def get_all_metadata(self) -> Dict[str, str]:
+        """Get all metadata from the database.
+
+        Returns:
+            Dictionary of all metadata key-value pairs.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT key, value FROM database_metadata")
+        return dict(cursor.fetchall())
 
     def close(self) -> None:
         """Close database connection."""

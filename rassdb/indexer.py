@@ -382,9 +382,10 @@ class CodebaseIndexer:
                 "file_name": chunk.metadata.get("file_name", ""),
             }
 
-            # Add any docstring if available
-            if "docstring" in chunk.metadata:
-                metadata["docstring"] = chunk.metadata["docstring"]
+            # Pass through all useful metadata from the chunk
+            for key in ["docstring", "parent_class", "class_name", "function_name", "node_type"]:
+                if key in chunk.metadata:
+                    metadata[key] = chunk.metadata[key]
 
             return self.embedding_strategy.prepare_code(chunk, metadata)
         else:
@@ -597,6 +598,10 @@ class CodebaseIndexer:
             self.vector_store.conn.execute("DELETE FROM file_metadata")
             self.vector_store.conn.commit()
             logger.info("✓ Cleared existing database")
+
+        # Store the root path in database metadata
+        self.vector_store.set_metadata("root_path", str(base_path))
+        logger.info(f"✓ Stored root path: {base_path}")
 
         # Load gitignore if available
         gitignore_func = None
