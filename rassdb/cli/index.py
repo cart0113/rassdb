@@ -5,6 +5,7 @@ the RASSDB vector database.
 """
 
 import logging
+import sys
 from pathlib import Path
 import click
 
@@ -105,7 +106,6 @@ def main(
         # Index the directory
         indexer.index_directory(
             directory,
-            use_gitignore=not no_gitignore,
             show_progress=not quiet,
             clear_existing=clear,
         )
@@ -114,7 +114,10 @@ def main(
         indexer.close()
 
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        import traceback
+
+        click.echo("Error occurred:", err=True)
+        traceback.print_exc()
         sys.exit(1)
 
 

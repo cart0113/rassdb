@@ -1,1 +1,0 @@
-"""Data models for RASSDB Chat."""

@@ -1,11 +1,10 @@
 #!/bin/bash
 
-# Start all servers for the example chat bot
-# This includes the backend, frontend, and optionally the Python backend
+# Start the RASSDB example chat bot server
 
 cd "$(dirname "$0")"
 
-echo "Starting all servers for RASSDB Example Chat Bot..."
+echo "Starting RASSDB Example Chat Bot..."
 echo "=============================================="
 
 # First check if Ollama is running and Qwen model is available
@@ -23,63 +22,36 @@ check_port() {
     lsof -ti:$1 > /dev/null 2>&1
 }
 
-# Kill existing processes on our ports
+# Kill existing processes on our port
 echo "Checking for existing processes..."
 if check_port 3000; then
     echo "Killing process on port 3000..."
     kill -9 $(lsof -ti:3000) 2>/dev/null
 fi
-if check_port 3001; then
-    echo "Killing process on port 3001..."
-    kill -9 $(lsof -ti:3001) 2>/dev/null
-fi
-if check_port 8000; then
-    echo "Killing process on port 8000..."
-    kill -9 $(lsof -ti:8000) 2>/dev/null
-fi
 
 # Wait a moment for ports to be released
 sleep 2
 
-# Start the main backend server
+# Start the main server
 echo ""
-echo "1. Starting main backend server (Node.js)..."
+echo "Starting server (Node.js)..."
 ./start-backend.sh &
 BACKEND_PID=$!
 
-# Wait for backend to start
-sleep 3
-
-# Start the frontend server
-echo ""
-echo "2. Starting frontend server..."
-./start-frontend.sh &
-FRONTEND_PID=$!
-
-# Optionally start Python backend (commented out by default)
-# echo ""
-# echo "3. Starting Python backend server (FastAPI)..."
-# ./start-python-backend.sh &
-# PYTHON_PID=$!
-
 echo ""
 echo "=============================================="
-echo "All servers started!"
+echo "Server started!"
 echo ""
-echo "Access the chat interface at: http://localhost:3001"
-echo "Backend API at: http://localhost:3000"
-# echo "Python API docs at: http://localhost:8000/docs"
+echo "Access the chat interface at: http://localhost:3000"
 echo ""
-echo "Press Ctrl+C to stop all servers"
+echo "Press Ctrl+C to stop the server"
 echo "=============================================="
 
 # Function to cleanup on exit
 cleanup() {
     echo ""
-    echo "Stopping all servers..."
+    echo "Stopping server..."
     kill $BACKEND_PID 2>/dev/null
-    kill $FRONTEND_PID 2>/dev/null
-    # kill $PYTHON_PID 2>/dev/null
     exit 0
 }
 

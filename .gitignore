@@ -85,3 +85,6 @@ dmypy.json
 # Ruff
 .ruff_cache/
 .claude
+example-chat-bot/.rassdb
+example-chat-bot/.rassdb/*
+example-chat-bot/

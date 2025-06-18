@@ -8,12 +8,14 @@ import logging
 from pathlib import Path
 from typing import Set, Optional, Callable, Any, Dict, List
 from tqdm import tqdm
-import gitignore_parser
+
+# from rassdb.ui import IndexingProgress
 from sentence_transformers import SentenceTransformer
 import numpy as np
 import numpy.typing as npt
 import tomllib
 import fnmatch
+import re
 
 from rassdb.vector_store import VectorStore
 from rassdb.code_parser import CodeParser, CodeChunk
@@ -111,6 +113,7 @@ class CodebaseIndexer:
         "yarn.lock",
         "Cargo.lock",
         "poetry.lock",
+        ".rassdb",  # Never index .rassdb folders
     }
 
     def __init__(
@@ -130,7 +133,7 @@ class CodebaseIndexer:
             embedding_dim: Dimension of embeddings.
             code_extensions: Set of file extensions to index (uses defaults if None).
             ignore_patterns: Set of patterns to ignore (uses defaults if None).
-            use_rassdb_config: Whether to use .rassdb-ignore and .rassdb-include.toml files.
+            use_rassdb_config: Whether to use .rassdb-config.toml files.
         """
         self.db_path = db_path
         self.parser = CodeParser()
@@ -138,7 +141,7 @@ class CodebaseIndexer:
         self.model: Optional[SentenceTransformer] = None
         self.embedding_strategy: Optional[EmbeddingStrategy] = None
         self.code_extensions = code_extensions or self.DEFAULT_CODE_EXTENSIONS
-        self.ignore_patterns = ignore_patterns or self.DEFAULT_IGNORE_PATTERNS
+        self.ignore_patterns = ignore_patterns or set()
         self.use_rassdb_config = use_rassdb_config
         self.config: Optional[Dict] = None
         self.include_extensions: Set[str] = set()
@@ -198,18 +201,7 @@ class CodebaseIndexer:
         Args:
             base_path: The base directory path to look for config files.
         """
-        # First, try to load global config
-        global_config = None
-        global_config_path = Path.home() / ".rassdb-config.toml"
-        if global_config_path.exists():
-            try:
-                with open(global_config_path, "rb") as f:
-                    global_config = tomllib.load(f)
-                logger.info("✓ Found global ~/.rassdb-config.toml")
-            except Exception:
-                pass
-
-        # Then, load project config (overrides global)
+        # Check project config first (no merging with global)
         rassdb_config_path = base_path / ".rassdb-config.toml"
         if rassdb_config_path.exists():
             try:
@@ -217,13 +209,23 @@ class CodebaseIndexer:
                     self.config = tomllib.load(f)
                 logger.info("✓ Using project .rassdb-config.toml file")
             except Exception as e:
-                logger.warning(f"Failed to load project .rassdb-config.toml: {e}")
-                self.config = global_config
+                logger.error(f"Failed to parse project .rassdb-config.toml: {e}")
+                raise ValueError(f"Failed to parse .rassdb-config.toml: {e}") from e
         else:
-            # Use global config if no project config
-            self.config = global_config
-            if global_config:
-                logger.info("✓ Using global config")
+            # Check global config only if no project config
+            global_config_path = Path.home() / ".rassdb-config.toml"
+            if global_config_path.exists():
+                try:
+                    with open(global_config_path, "rb") as f:
+                        self.config = tomllib.load(f)
+                    logger.info("✓ Using global ~/.rassdb-config.toml")
+                except Exception as e:
+                    logger.error(f"Failed to parse global ~/.rassdb-config.toml: {e}")
+                    raise ValueError(
+                        f"Failed to parse ~/.rassdb-config.toml: {e}"
+                    ) from e
+            else:
+                self.config = None
 
         # Check for embedding model override
         if (
@@ -237,39 +239,113 @@ class CodebaseIndexer:
         # Build sets for efficient lookup
         if self.config:
             self.include_extensions = set()
-            if "include-extensions" in self.config:
-                for lang_exts in self.config["include-extensions"].values():
-                    self.include_extensions.update(lang_exts)
+            if "include" in self.config and "extensions" in self.config["include"]:
+                extensions = self.config["include"]["extensions"]
+                if isinstance(extensions, list):
+                    self.include_extensions.update(extensions)
 
             self.exclude_extensions = set()
-            if "exclude-extensions" in self.config:
-                for category_exts in self.config["exclude-extensions"].values():
-                    self.exclude_extensions.update(category_exts)
+            if "exclude" in self.config and "extensions" in self.config["exclude"]:
+                extensions = self.config["exclude"]["extensions"]
+                if isinstance(extensions, list):
+                    self.exclude_extensions.update(extensions)
 
             self.include_patterns = []
-            if (
-                "include-paths" in self.config
-                and "patterns" in self.config["include-paths"]
-            ):
-                self.include_patterns = self.config["include-paths"]["patterns"]
+            if "include" in self.config and "paths" in self.config["include"]:
+                paths = self.config["include"]["paths"]
+                if isinstance(paths, list):
+                    self.include_patterns = paths
 
             self.exclude_patterns = []
-            if (
-                "exclude-paths" in self.config
-                and "patterns" in self.config["exclude-paths"]
-            ):
-                self.exclude_patterns = self.config["exclude-paths"]["patterns"]
+            if "exclude" in self.config and "paths" in self.config["exclude"]:
+                paths = self.config["exclude"]["paths"]
+                if isinstance(paths, list):
+                    self.exclude_patterns = paths
+
+            # Handle add-gitignore-to-exclude-paths from exclude section
+            add_gitignore = True  # Default
+            if "exclude" in self.config:
+                add_gitignore = self.config["exclude"].get(
+                    "add-gitignore-to-exclude-paths", True
+                )
+            if add_gitignore:
+                gitignore_patterns = self._load_gitignore_patterns(base_path)
+                self.exclude_patterns.extend(gitignore_patterns)
         else:
-            # No config file, use defaults
-            self.include_extensions = self.code_extensions
+            # No config file - index ALL files (no extension filtering)
+            self.include_extensions = set()
             self.exclude_extensions = set()
             self.include_patterns = []
             self.exclude_patterns = []
+
+            # Default behavior when no config: still add gitignore patterns
+            gitignore_patterns = self._load_gitignore_patterns(base_path)
+            self.exclude_patterns.extend(gitignore_patterns)
+
+    def _load_gitignore_patterns(self, base_path: Path) -> List[str]:
+        """Load gitignore patterns from project and user gitignore files.
+
+        Args:
+            base_path: The base directory path of the project.
+
+        Returns:
+            List of gitignore patterns to exclude.
+        """
+        patterns = []
+
+        # Load project .gitignore
+        project_gitignore = base_path / ".gitignore"
+        if project_gitignore.exists():
+            patterns.extend(self._parse_gitignore_file(project_gitignore))
+            logger.debug(f"Loaded {len(patterns)} patterns from project .gitignore")
+
+        # Load user ~/.gitignore
+        user_gitignore = Path.home() / ".gitignore"
+        if user_gitignore.exists():
+            user_patterns = self._parse_gitignore_file(user_gitignore)
+            patterns.extend(user_patterns)
+            logger.debug(f"Loaded {len(user_patterns)} patterns from user ~/.gitignore")
+
+        return patterns
+
+    def _parse_gitignore_file(self, gitignore_path: Path) -> List[str]:
+        """Parse a gitignore file and return list of patterns.
+
+        Args:
+            gitignore_path: Path to the gitignore file.
+
+        Returns:
+            List of gitignore patterns.
+        """
+        patterns = []
+        try:
+            with open(gitignore_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    # Skip empty lines and comments
+                    if line and not line.startswith("#"):
+                        # Convert gitignore patterns to glob patterns
+                        # Gitignore patterns starting with / are relative to root
+                        if line.startswith("/"):
+                            patterns.append(line[1:])
+                        else:
+                            # Pattern can match at any level
+                            if line.endswith("/"):
+                                # Directory pattern - match anything inside it
+                                patterns.append("**/" + line + "**")
+                            else:
+                                # File pattern - can match at any level
+                                patterns.append("**/" + line)
+        except Exception as e:
+            logger.warning(f"Failed to read gitignore file {gitignore_path}: {e}")
+
+        return patterns
 
     def _should_include_file(self, file_path: Path, base_path: Path) -> bool:
         """Determine if a file should be included based on config rules.
 
-        Priority: INCLUDE always wins over EXCLUDE
+        Logic: File must have included extension AND match include path pattern (if any)
+               AND NOT match exclude patterns AND NOT have excluded extension
 
         Args:
             file_path: The file path to check.
@@ -279,42 +355,38 @@ class CodebaseIndexer:
             True if file should be included.
         """
         relative_path = str(file_path.relative_to(base_path))
-        file_ext = file_path.suffix.lower()
+        file_ext = file_path.suffix
 
-        # Check if file matches any include pattern - INCLUDES ALWAYS WIN
-        for pattern in self.include_patterns:
-            if fnmatch.fnmatch(relative_path, pattern):
-                return True
+        # First check: file MUST have an included extension (if include extensions are defined)
+        if self.include_extensions:
+            if file_ext not in self.include_extensions:
+                return False
 
-        # Check if extension is explicitly included - INCLUDES ALWAYS WIN
-        if file_ext in self.include_extensions:
-            return True
+        # Second check: if include paths are defined, file MUST match at least one
+        if self.include_patterns:
+            matches_include_pattern = False
+            for pattern in self.include_patterns:
+                if fnmatch.fnmatch(relative_path, pattern):
+                    matches_include_pattern = True
+                    break
+            if not matches_include_pattern:
+                return False
 
-        # Now check excludes (only if not explicitly included)
-        # Check exclude patterns
+        # Third check: file must NOT match any exclude pattern
         for pattern in self.exclude_patterns:
             if fnmatch.fnmatch(relative_path, pattern):
                 return False
 
-        # Check exclude extensions
+        # Fourth check: file must NOT have excluded extension
         if file_ext in self.exclude_extensions:
             return False
 
-        # If we have a config file and the extension isn't in include list, exclude it
-        if (
-            self.config
-            and self.include_extensions
-            and file_ext not in self.include_extensions
-        ):
-            return False
-
-        # Default: include if no config or extension is in default list
-        return file_ext in self.code_extensions
+        # If we get here, file passes all checks
+        return True
 
     def should_index_file(
         self,
         file_path: Path,
-        gitignore_func: Optional[Callable[[str], bool]] = None,
         max_file_size: int = 1024 * 1024,  # 1MB
         base_path: Optional[Path] = None,
     ) -> bool:
@@ -322,16 +394,15 @@ class CodebaseIndexer:
 
         Args:
             file_path: Path to the file.
-            gitignore_func: Function to check gitignore rules.
             max_file_size: Maximum file size in bytes.
             base_path: Base directory path for relative path calculations.
 
         Returns:
             True if the file should be indexed.
         """
-        # If we have RASSDB config and base_path, use the new logic
-        if self.use_rassdb_config and self.config and base_path:
-            # Check config-based rules first
+        # If we have RASSDB config enabled, use the new logic
+        if self.use_rassdb_config and base_path:
+            # Check config-based rules
             if not self._should_include_file(file_path, base_path):
                 return False
         else:
@@ -339,17 +410,7 @@ class CodebaseIndexer:
             if file_path.suffix.lower() not in self.code_extensions:
                 return False
 
-        # Check default ignore patterns (from DEFAULT_IGNORE_PATTERNS)
-        for pattern in self.ignore_patterns:
-            if pattern.startswith("*"):
-                if file_path.name.endswith(pattern[1:]):
-                    return False
-            elif pattern in str(file_path):
-                return False
-
-        # Check gitignore if available (works in conjunction with our rules)
-        if gitignore_func and gitignore_func(str(file_path)):
-            return False
+        # No default ignore patterns - all filtering is done through config
 
         # Check file size
         try:
@@ -383,7 +444,13 @@ class CodebaseIndexer:
             }
 
             # Pass through all useful metadata from the chunk
-            for key in ["docstring", "parent_class", "class_name", "function_name", "node_type"]:
+            for key in [
+                "docstring",
+                "parent_class",
+                "class_name",
+                "function_name",
+                "node_type",
+            ]:
                 if key in chunk.metadata:
                     metadata[key] = chunk.metadata[key]
 
@@ -420,6 +487,39 @@ class CodebaseIndexer:
 
             return "\n".join(context_parts)
 
+    def is_binary_file(self, file_path: Path) -> bool:
+        """Check if a file is binary by reading a sample of its content.
+
+        Args:
+            file_path: Path to the file to check.
+
+        Returns:
+            True if the file appears to be binary, False otherwise.
+        """
+        try:
+            # Read first 8192 bytes to check for binary content
+            with open(file_path, "rb") as f:
+                chunk = f.read(8192)
+
+            # Empty files are not binary
+            if not chunk:
+                return False
+
+            # Check for null bytes (common in binary files)
+            if b"\x00" in chunk:
+                return True
+
+            # Try to decode as UTF-8
+            try:
+                chunk.decode("utf-8")
+                return False
+            except UnicodeDecodeError:
+                return True
+
+        except Exception:
+            # If we can't read the file, assume it's binary
+            return True
+
     def index_file(
         self, file_path: Path, base_path: Path, max_chunk_size: int = 1500
     ) -> int:
@@ -434,6 +534,11 @@ class CodebaseIndexer:
             Number of chunks indexed.
         """
         try:
+            # Skip binary files
+            if self.is_binary_file(file_path):
+                logger.debug(f"Skipping binary file: {file_path}")
+                return 0
+
             # Ensure embedding model and vector store are initialized
             self._init_embedding_model()
 
@@ -504,7 +609,9 @@ class CodebaseIndexer:
                 )
 
                 # Generate embedding
-                embedding = self.model.encode(embedding_text, normalize_embeddings=True)
+                embedding = self.model.encode(
+                    embedding_text, normalize_embeddings=True, show_progress_bar=False
+                )
 
                 # Ensure embedding is 1D array (some models return 2D array for single input)
                 if embedding.ndim == 2 and embedding.shape[0] == 1:
@@ -513,7 +620,7 @@ class CodebaseIndexer:
                 # Add chunk metadata
                 metadata = chunk.metadata.copy()
                 metadata["file_name"] = file_path.name
-                
+
                 # Extract original boundaries from metadata if this is a part
                 part_start_line = None
                 part_end_line = None
@@ -562,7 +669,6 @@ class CodebaseIndexer:
     def index_directory(
         self,
         directory: str,
-        use_gitignore: bool = True,
         show_progress: bool = True,
         clear_existing: bool = False,
     ) -> None:
@@ -570,7 +676,6 @@ class CodebaseIndexer:
 
         Args:
             directory: Path to the directory to index.
-            use_gitignore: Whether to respect .gitignore files.
             show_progress: Whether to show progress bar.
             clear_existing: Whether to clear existing data before indexing.
         """
@@ -583,6 +688,8 @@ class CodebaseIndexer:
 
         # Store base path for model loading
         self._base_path = base_path
+        # Store show_progress flag for use in encode calls
+        self._show_progress = show_progress
 
         # Load RASSDB configuration files if enabled
         if self.use_rassdb_config:
@@ -603,19 +710,11 @@ class CodebaseIndexer:
         self.vector_store.set_metadata("root_path", str(base_path))
         logger.info(f"✓ Stored root path: {base_path}")
 
-        # Load gitignore if available
-        gitignore_func = None
-        if use_gitignore:
-            gitignore_path = base_path / ".gitignore"
-            if gitignore_path.exists():
-                gitignore_func = gitignore_parser.parse_gitignore(gitignore_path)
-                logger.info("✓ Using .gitignore file")
-
         # Collect all files to index
         files_to_index = []
         for file_path in base_path.rglob("*"):
             if file_path.is_file() and self.should_index_file(
-                file_path, gitignore_func, base_path=base_path
+                file_path, base_path=base_path
             ):
                 files_to_index.append(file_path)
 
@@ -623,14 +722,19 @@ class CodebaseIndexer:
 
         # Index files with progress bar
         total_chunks = 0
-        iterator = files_to_index
 
-        if show_progress:
-            iterator = tqdm(files_to_index, desc="Indexing files")
+        # # Create progress UI (shellack interface - commented out for now)
+        # progress = IndexingProgress(len(files_to_index), quiet=not show_progress)
+        # if show_progress:
+        #     progress.start()
 
-        for file_path in iterator:
+        for idx, file_path in enumerate(files_to_index):
+            # Show current file
+            relative_path = str(file_path.relative_to(base_path))
             if show_progress:
-                iterator.set_description(f"Indexing {file_path.name}")
+                print(f"Indexing: {relative_path}")
+
+            # Index the file
             chunks = self.index_file(file_path, base_path)
             total_chunks += chunks
 

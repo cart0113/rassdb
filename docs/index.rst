@@ -7,6 +7,7 @@ RASSDB Documentation
 
    installation
    quickstart
+   configuration
    api
    cli
    mcp

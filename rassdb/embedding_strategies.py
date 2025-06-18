@@ -116,30 +116,6 @@ class NomicEmbedCodeStrategy(EmbeddingStrategy):
         }
 
 
-class CodeBERTStrategy(EmbeddingStrategy):
-    """Strategy for microsoft/codebert-base model.
-
-    Strategy: Rich documentation with complete implementation.
-    Include comprehensive docstrings and full implementation.
-    No artificial metadata - just natural code + docs.
-    """
-
-    def prepare_code(self, chunk: CodeChunk, metadata: Dict[str, Any]) -> str:
-        """Include comprehensive docstrings with full implementation."""
-        # Extract docstring if available from chunk metadata
-        docstring = chunk.metadata.get("docstring", "") or metadata.get("docstring", "")
-
-        # For CodeBERT, include natural documentation only
-        if docstring:
-            return f"{docstring}\n{chunk.content}"
-        return chunk.content
-
-    @property
-    def ideal_chunk_size(self) -> Dict[str, int]:
-        """Ideal: 50-150 lines or 1,500-3,000 characters (including docstrings)."""
-        return {"min_lines": 50, "max_lines": 150, "min_chars": 1500, "max_chars": 3000}
-
-
 class QodoEmbedStrategy(EmbeddingStrategy):
     """Strategy for Qodo/Qodo-Embed models.
 
@@ -371,8 +347,6 @@ EMBEDDING_STRATEGIES = {
     # Nomic Embed Code GGUF - Quantized version for local use
     "nomic-ai/nomic-embed-code-gguf": NomicEmbedCodeStrategy,
     "nomic-embed-code-gguf": NomicEmbedCodeStrategy,
-    # CodeBERT - Good for documentation-heavy projects
-    "microsoft/codebert-base": CodeBERTStrategy,
     # Qodo Embed - Best for structured RAG systems
     "Qodo/Qodo-Embed-1-1.5B": QodoEmbedStrategy,
     # CodeRankEmbed - Optimized for NL→code with prefix
@@ -388,7 +362,6 @@ SUPPORTED_MODELS = [
     "nomic-ai/nomic-embed-code",
     "nomic-ai/nomic-embed-code-gguf",
     "nomic-embed-code-gguf",
-    "microsoft/codebert-base",
     "Qodo/Qodo-Embed-1-1.5B",
     "nomic-ai/CodeRankEmbed",
     "nomic-ai/nomic-embed-text-v1.5",
@@ -401,11 +374,10 @@ def get_embedding_strategy(model_name: str) -> EmbeddingStrategy:
 
     Supported models:
     1. nomic-ai/nomic-embed-code - Raw code only (7B params)
-    2. microsoft/codebert-base - Rich documentation
-    3. Qodo/Qodo-Embed-1-1.5B - Structured metadata
-    4. nomic-ai/CodeRankEmbed - Code-specific with query prefix
-    5. nomic-ai/nomic-embed-text-v1.5 - General text model (default)
-    6. nomic-cloud/nomic-embed-code - Cloud API for code embeddings
+    2. Qodo/Qodo-Embed-1-1.5B - Structured metadata
+    3. nomic-ai/CodeRankEmbed - Code-specific with query prefix
+    4. nomic-ai/nomic-embed-text-v1.5 - General text model (default)
+    5. nomic-cloud/nomic-embed-code - Cloud API for code embeddings
 
     Args:
         model_name: The name of the embedding model.
@@ -429,9 +401,8 @@ def get_embedding_strategy(model_name: str) -> EmbeddingStrategy:
         f"Only these models are supported:\n"
         f"  1. nomic-ai/nomic-embed-code - Raw code only (7B params)\n"
         f"  2. nomic-ai/nomic-embed-code-gguf - GGUF quantized version\n"
-        f"  3. microsoft/codebert-base - Rich documentation\n"
-        f"  4. Qodo/Qodo-Embed-1-1.5B - Structured metadata\n"
-        f"  5. nomic-ai/CodeRankEmbed - Code-specific with query prefix\n"
-        f"  6. nomic-ai/nomic-embed-text-v1.5 - General text model (default)\n"
-        f"  7. nomic-cloud/nomic-embed-code - Cloud API for code embeddings\n"
+        f"  3. Qodo/Qodo-Embed-1-1.5B - Structured metadata\n"
+        f"  4. nomic-ai/CodeRankEmbed - Code-specific with query prefix\n"
+        f"  5. nomic-ai/nomic-embed-text-v1.5 - General text model (default)\n"
+        f"  6. nomic-cloud/nomic-embed-code - Cloud API for code embeddings\n"
     )

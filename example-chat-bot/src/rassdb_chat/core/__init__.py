@@ -1,1 +1,0 @@
-"""Core RASSDB MCP functionality."""
