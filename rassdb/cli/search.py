@@ -385,13 +385,17 @@ class ResultFormatter:
             # File and location info
             output.append(f"File: {result['file_path']}")
             output.append(f"Lines: {result['start_line']}-{result['end_line']}")
-            
+
             # Show part lines if different from full lines
-            if result.get('part_start_line') and result.get('part_end_line'):
-                if (result['part_start_line'] != result['start_line'] or 
-                    result['part_end_line'] != result['end_line']):
-                    output.append(f"Part Lines: {result['part_start_line']}-{result['part_end_line']}")
-            
+            if result.get("part_start_line") and result.get("part_end_line"):
+                if (
+                    result["part_start_line"] != result["start_line"]
+                    or result["part_end_line"] != result["end_line"]
+                ):
+                    output.append(
+                        f"Part Lines: {result['part_start_line']}-{result['part_end_line']}"
+                    )
+
             output.append(f"Type: {result['chunk_type']}")
             output.append(f"Language: {result['language']}")
 
@@ -441,19 +445,23 @@ class ResultFormatter:
         for i, result in enumerate(results, 1):
             # Format the lines column
             lines_str = f"{result['start_line']}-{result['end_line']}"
-            
+
             # If this is a part and has different part lines, show both
-            if result.get('part_start_line') and result.get('part_end_line'):
-                if (result['part_start_line'] != result['start_line'] or 
-                    result['part_end_line'] != result['end_line']):
+            if result.get("part_start_line") and result.get("part_end_line"):
+                if (
+                    result["part_start_line"] != result["start_line"]
+                    or result["part_end_line"] != result["end_line"]
+                ):
                     # Show both original and part lines
                     lines_str = f"{result['start_line']}-{result['end_line']}"
-                    part_lines_str = f"{result['part_start_line']}-{result['part_end_line']}"
+                    part_lines_str = (
+                        f"{result['part_start_line']}-{result['part_end_line']}"
+                    )
                 else:
                     part_lines_str = ""
             else:
                 part_lines_str = ""
-            
+
             table_data.append(
                 [
                     i,
@@ -535,7 +543,10 @@ class ResultFormatter:
     default="table",
     help="Output format",
 )
-@click.option("--language", help="Filter by programming language")
+@click.option(
+    "--language",
+    help="Filter by programming language (regex). Example: '(python|js)' for Python or JavaScript",
+)
 @click.option(
     "--file-pattern",
     default=None,

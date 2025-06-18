@@ -308,7 +308,7 @@ class VectorStore:
         Args:
             query_embedding: The query embedding vector.
             limit: Maximum number of results to return.
-            language: Filter by programming language.
+            language: Filter by programming language (regex pattern).
             file_pattern: Filter by file path pattern.
 
         Returns:
@@ -321,7 +321,7 @@ class VectorStore:
         params = []
 
         if language:
-            where_clauses.append("c.language = ?")
+            where_clauses.append("c.language REGEXP ?")
             params.append(language)
 
         if file_pattern:
@@ -382,7 +382,7 @@ class VectorStore:
                    - "term*" for prefix search
                    - "term1 NEAR(term2, 10)" for proximity search
             limit: Maximum number of results to return.
-            language: Filter by programming language.
+            language: Filter by programming language (regex pattern).
             file_pattern: Filter by file path pattern.
 
         Returns:
@@ -398,7 +398,7 @@ class VectorStore:
         params = []
 
         if language:
-            where_clauses.append("c.language = ?")
+            where_clauses.append("c.language REGEXP ?")
             params.append(language)
 
         if file_pattern:
